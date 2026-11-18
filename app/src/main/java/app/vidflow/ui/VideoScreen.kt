@@ -152,9 +152,9 @@ fun VideoScreen(video: Video, nav: Nav, onFullscreen: () -> Unit) {
                 }
             }
         }
+        val related: List<Item> = remember(i) { i?.let { Yt.related(it) }.orEmpty() }
         LazyColumn(contentPadding = PaddingValues(bottom = 24.dp), modifier = Modifier.fillMaxSize()) {
             item { Details(video, i, nav) }
-            val related: List<Item> = remember(i) { i?.let { Yt.related(it) }.orEmpty() }
             if (related.isNotEmpty()) {
                 item {
                     Text(

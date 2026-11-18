@@ -1,6 +1,7 @@
 package app.vidflow.ui
 
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.ui.composed
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -205,7 +206,7 @@ fun VideoMenu(v: Video, nav: Nav) {
     val context = androidx.compose.ui.platform.LocalContext.current
     Box {
         androidx.compose.material3.IconButton(onClick = { open = true }, modifier = Modifier.size(36.dp)) {
-            androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.MoreVert, contentDescription = "More", modifier = Modifier.size(18.dp))
+            Text("\u22EE", fontSize = 18.sp, fontWeight = FontWeight.Bold)
         }
         androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             androidx.compose.material3.DropdownMenuItem(text = { Text("Play in background") }, onClick = { open = false; nav.background(v) })
@@ -266,7 +267,7 @@ fun ShortsShelf(shorts: List<Video>, nav: Nav) {
 }
 
 /** Gentle moving highlight used for loading placeholders. */
-fun Modifier.shimmer(dark: Boolean = false): Modifier = androidx.compose.ui.composed {
+fun Modifier.shimmer(dark: Boolean = false): Modifier = composed {
     val t = androidx.compose.animation.core.rememberInfiniteTransition(label = "shimmer")
     val x by t.animateFloat(
         initialValue = -400f, targetValue = 1400f,
@@ -463,9 +464,9 @@ fun PagedColumn(
     nav: Nav,
     load: () -> Paged,
     bigVideos: Boolean = true,
-    header: LazyListScope.() -> Unit = {},
     /** Shown after the 3rd item (e.g. a Shorts shelf). */
     insert: (@Composable () -> Unit)? = null,
+    header: LazyListScope.() -> Unit = {},
 ) {
     val list = remember(key) { PagedList() }
     val scope = rememberCoroutineScope()
