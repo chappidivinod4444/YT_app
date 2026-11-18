@@ -59,7 +59,11 @@ import app.vidflow.core.Library
 import app.vidflow.core.Video
 import app.vidflow.core.Yt
 import app.vidflow.player.PlayerHolder
+import app.vidflow.core.GoogleAccount
+import app.vidflow.ui.AccountListScreen
 import app.vidflow.ui.ChannelScreen
+import app.vidflow.ui.ShortsScreen
+import kotlinx.coroutines.launch
 import app.vidflow.ui.HomeScreen
 import app.vidflow.ui.LibraryScreen
 import app.vidflow.ui.Nav
@@ -76,6 +80,7 @@ class VidflowApp : Application() {
         super.onCreate()
         Yt.init()
         Library.init(this)
+        app.vidflow.core.GoogleAccount.init(this)
         PlayerHolder.init(this)
     }
 }
@@ -84,6 +89,10 @@ sealed interface Screen {
     data object Home : Screen
     data object Library : Screen
     data object Search : Screen
+    data object Shorts : Screen
+    data object Liked : Screen
+    data object MyPlaylists : Screen
+    data class AccountPlaylist(val url: String, val title: String) : Screen
     data class Watch(val video: Video) : Screen
     data class ChannelPage(val url: String) : Screen
     data class PlaylistPage(val url: String) : Screen
@@ -164,6 +173,9 @@ private fun Root(activity: MainActivity) {
     val fullscreen by Ui.fullscreen.collectAsState()
     val current by PlayerHolder.current.collectAsState()
     val shared by Ui.openUrl.collectAsState()
+    val snackbar = remember { androidx.compose.material3.SnackbarHostState() }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val say: (String) -> Unit = { m -> scope.launch { snackbar.currentSnackbarData?.dismiss(); snackbar.showSnackbar(m) } }
 
     fun push(s: Screen) {
         if (s is Screen.Watch) stack.removeAll { it is Screen.Watch }
@@ -220,24 +232,43 @@ private fun Root(activity: MainActivity) {
             Box(Modifier.weight(1f)) {
                 when (top) {
                     Screen.Home -> HomeScreen(nav)
-                    Screen.Library -> LibraryScreen(nav)
+                    Screen.Library -> LibraryScreen(
+                        nav,
+                        openLiked = { push(Screen.Liked) },
+                        openPlaylists = { push(Screen.MyPlaylists) },
+                        say = say,
+                    )
+                    Screen.Shorts -> ShortsScreen(nav)
+                    Screen.Liked -> AccountListScreen("Liked videos", nav, load = { GoogleAccount.liked() }, openPlaylist = {})
+                    Screen.MyPlaylists -> AccountListScreen(
+                        "Your playlists", nav, load = { GoogleAccount.playlists() },
+                        openPlaylist = { p -> push(Screen.AccountPlaylist(p.url, p.title)) },
+                    )
+                    is Screen.AccountPlaylist -> AccountListScreen(top.title, nav, load = { GoogleAccount.playlistVideos(top.url) }, openPlaylist = {})
                     Screen.Search -> SearchScreen(nav)
                     is Screen.Watch -> VideoScreen(top.video, nav, onFullscreen = { activity.setFullscreen(true) })
                     is Screen.ChannelPage -> ChannelScreen(top.url, nav)
                     is Screen.PlaylistPage -> PlaylistScreen(top.url, nav)
                 }
+                androidx.compose.material3.SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp))
             }
             val playing = current
-            if (playing != null && top !is Screen.Watch) {
+            if (playing != null && top !is Screen.Watch && top != Screen.Shorts && !playing.short) {
                 MiniPlayer(playing, onOpen = { push(Screen.Watch(playing)) }, onClose = { PlayerHolder.stop() })
             }
-            if (top == Screen.Home || top == Screen.Library) {
+            if (top == Screen.Home || top == Screen.Library || top == Screen.Shorts) {
                 NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainerLow, modifier = Modifier.height(64.dp)) {
                     NavigationBarItem(
                         selected = top == Screen.Home,
                         onClick = { stack.clear(); stack.add(Screen.Home); tab = Screen.Home },
                         icon = { Icon(Icons.Filled.Home, contentDescription = null) },
                         label = { Text("Home") },
+                    )
+                    NavigationBarItem(
+                        selected = top == Screen.Shorts,
+                        onClick = { stack.clear(); stack.add(Screen.Shorts); tab = Screen.Shorts },
+                        icon = { Text("\u26A1", style = MaterialTheme.typography.titleMedium) },
+                        label = { Text("Shorts") },
                     )
                     NavigationBarItem(
                         selected = top == Screen.Library,

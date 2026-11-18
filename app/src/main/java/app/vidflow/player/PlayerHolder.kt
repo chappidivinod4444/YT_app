@@ -99,8 +99,9 @@ object PlayerHolder {
     }
 
     /** Must be called on the main thread with info fetched in the background. */
-    fun play(video: Video, streamInfo: StreamInfo, height: Int = preferredHeight(), resumeAt: Long? = null) {
+    fun play(video: Video, streamInfo: StreamInfo, height: Int = preferredHeight(), resumeAt: Long? = null, loop: Boolean = false) {
         error.value = null
+        player.repeatMode = if (loop) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
         val sameVideo = current.value?.url == video.url
         current.value = video
         info.value = streamInfo
@@ -124,7 +125,7 @@ object PlayerHolder {
         val v = current.value ?: return
         val i = info.value ?: return
         setPreferredHeight(height)
-        play(v, i, height, player.currentPosition)
+        play(v, i, height, player.currentPosition, loop = player.repeatMode == Player.REPEAT_MODE_ONE)
     }
 
     fun stop() {

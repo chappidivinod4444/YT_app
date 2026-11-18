@@ -202,7 +202,9 @@ object Yt {
 
     // ---- channel
 
-    class ChannelPage(val info: ChannelInfo, val videos: Paged)
+    class ChannelPage(val info: ChannelInfo, val videos: Paged) {
+        val shortsTab: ListLinkHandler? = info.tabs.firstOrNull { ChannelTabs.SHORTS in it.contentFilters }
+    }
 
     fun channel(url: String): ChannelPage {
         val info = ChannelInfo.getInfo(service, url)
@@ -210,6 +212,48 @@ object Yt {
             ?: info.tabs.firstOrNull()
         val videos = if (tab != null) tabPage(tab) else Paged(emptyList(), null)
         return ChannelPage(info, videos)
+    }
+
+    fun channelShorts(page: ChannelPage): Paged =
+        page.shortsTab?.let { tabPage(it).let { p -> Paged(p.items.map { i -> if (i is Video) i.copy(short = true) else i }, p.next) } }
+            ?: Paged(emptyList(), null)
+
+    /** Shorts from your channels first, then popular ones found by search. */
+    fun shortsFeed(subscriptionUrls: List<String>): Paged {
+        val fromSubs = java.util.concurrent.Executors.newFixedThreadPool(4).let { pool ->
+            val jobs = subscriptionUrls.shuffled().take(10).map { url ->
+                pool.submit<List<Item>> {
+                    try {
+                        val info = ChannelInfo.getInfo(service, url)
+                        val tab = info.tabs.firstOrNull { ChannelTabs.SHORTS in it.contentFilters } ?: return@submit emptyList()
+                        ChannelTabInfo.getInfo(service, tab).relatedItems.items().take(6)
+                    } catch (_: Throwable) {
+                        emptyList()
+                    }
+                }
+            }
+            val all = jobs.flatMap { runCatching { it.get() }.getOrDefault(emptyList()) }
+            pool.shutdown()
+            all
+        }
+        val search = try {
+            search("#shorts", "videos")
+        } catch (_: Throwable) {
+            Paged(emptyList(), null)
+        }
+        val found = search.items.filterIsInstance<Video>().filter { it.short || (it.durationSec in 1..60) }
+        val mixed = (fromSubs.filterIsInstance<Video>().shuffled() + found).distinctBy { it.url }
+            .map { it.copy(short = true) }
+        fun more(next: (suspend () -> Paged)?): (suspend () -> Paged)? = next?.let { n ->
+            {
+                val p = n()
+                Paged(
+                    p.items.filterIsInstance<Video>().filter { it.short || it.durationSec in 1..60 }.map { it.copy(short = true) },
+                    more(p.next),
+                )
+            }
+        }
+        return Paged(mixed, more(search.next))
     }
 
     private fun tabPage(tab: ListLinkHandler): Paged {

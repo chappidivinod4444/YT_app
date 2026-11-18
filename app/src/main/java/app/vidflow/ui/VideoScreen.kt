@@ -63,7 +63,7 @@ import org.schabi.newpipe.extractor.stream.StreamInfo
 
 /** The video surface. Shared by the watch page, full screen and picture-in-picture. */
 @Composable
-fun PlayerSurface(modifier: Modifier = Modifier, onFullscreen: (() -> Unit)? = null, controls: Boolean = true) {
+fun PlayerSurface(modifier: Modifier = Modifier, onFullscreen: (() -> Unit)? = null, controls: Boolean = true, fit: Boolean = true) {
     AndroidView(
         factory = { ctx ->
             PlayerView(ctx).apply {
@@ -75,6 +75,8 @@ fun PlayerSurface(modifier: Modifier = Modifier, onFullscreen: (() -> Unit)? = n
                 setShowPreviousButton(false)
                 setShowSubtitleButton(true)
                 keepScreenOn = true
+                resizeMode = if (fit) androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+                else androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                 if (onFullscreen != null) setFullscreenButtonClickListener { onFullscreen() }
             }
         },

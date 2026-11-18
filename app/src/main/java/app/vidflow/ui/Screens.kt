@@ -314,6 +314,12 @@ fun ChannelScreen(url: String, nav: Nav) {
             else -> {
                 val info = p.info
                 val subscribed = remember(subs) { Library.isSubscribed(url) }
+                var showShorts by remember(url) { mutableStateOf(false) }
+                if (showShorts) {
+                    BackHandlerCompat { showShorts = false }
+                    ShortsScreen(nav, key = "channel-shorts-$url", load = { Yt.channelShorts(p) })
+                    return@Column
+                }
                 PagedColumn(key = "channel-$url", nav = nav, load = { p.videos }, bigVideos = false) {
                     item {
                         Column {
@@ -344,6 +350,16 @@ fun ChannelScreen(url: String, nav: Nav) {
                             SubscribeButton(subscribed, Modifier.fillMaxWidth().padding(16.dp)) {
                                 Library.toggle(url, info.name, info.avatars.best(200))
                             }
+                            if (p.shortsTab != null) {
+                                OutlinedButton(
+                                    onClick = { showShorts = true },
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                                ) { Text("Watch Shorts") }
+                            }
+                            Text(
+                                "Videos", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp),
+                            )
                         }
                     }
                 }
@@ -351,6 +367,9 @@ fun ChannelScreen(url: String, nav: Nav) {
         }
     }
 }
+
+@Composable
+fun BackHandlerCompat(onBack: () -> Unit) = androidx.activity.compose.BackHandler(onBack = onBack)
 
 @Composable
 fun SubscribeButton(subscribed: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
@@ -402,13 +421,14 @@ fun PlaylistScreen(url: String, nav: Nav) {
 // ---------------------------------------------------------------- library
 
 @Composable
-fun LibraryScreen(nav: Nav) {
+fun LibraryScreen(nav: Nav, openLiked: () -> Unit = {}, openPlaylists: () -> Unit = {}, say: (String) -> Unit = {}) {
     val subs by Library.subscriptions.collectAsState()
     val history by Library.history.collectAsState()
     var confirmClear by remember { mutableStateOf(false) }
 
     LazyColumn(contentPadding = PaddingValues(bottom = 90.dp), modifier = Modifier.fillMaxSize()) {
         item { AppBar("Library", nav) }
+        item { AccountSection(nav, openLiked, openPlaylists, say) }
         item {
             Text("Subscriptions", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(16.dp, 8.dp))
         }
