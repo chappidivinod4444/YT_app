@@ -9,8 +9,11 @@ jobs:
       - run: |
           set +e
           git clone -q --depth 1 -b dev https://github.com/TeamNewPipe/NewPipe np
-          cd np
-          echo "== potoken / player datasource files"
-          find . -path ./node_modules -prune -o \( -iname '*potoken*' -o -iname '*DataSource*' -o -iname 'DownloaderImpl*' -o -iname '*BotGuard*' -o -iname '*.js' -path '*assets*' \) -print | sed 's/^/F /'
-          grep -rn "setPoTokenProvider\|PoTokenProvider" --include=*.kt --include=*.java app/src/main | head -20 | sed 's/^/G /'
-          for f in $(find app/src/main -iname '*potoken*' -o -iname 'YoutubeHttpDataSource*' -o -iname 'PlayerDataSource*' -o -iname 'DownloaderImpl*' | grep -E '\.(kt|java)$'); do echo "== $f $(wc -l < $f)"; done | sed 's/^/S /'
+          cd np/app/src/main/java/org/schabi/newpipe
+          for f in util/potoken/PoTokenProviderImpl.kt util/potoken/PoTokenWebView.kt util/potoken/PoTokenGenerator.kt DownloaderImpl.java player/helper/PlayerDataSource.java; do
+            echo "=====FILE $f"; cat "$f"
+          done
+          echo "=====FILE grep-yt-datasource"
+          grep -n "range\|rn=\|Header\|USER_AGENT\|isAndroid\|isIos\|isWeb\|getAndroidUserAgent\|getIosUserAgent\|ORIGIN\|REFERER\|POST\|alr\|class \|public .*(\|setRequestProperty\|connection\.\|getRequestUrl\|buildRequestUrl\|cpn" player/datasource/YoutubeHttpDataSource.java | head -220
+          echo "=====FILE potoken-assets"
+          ls ../../../../../assets 2>/dev/null
