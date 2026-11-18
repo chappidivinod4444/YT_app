@@ -87,12 +87,12 @@ object Library {
         })
     }
 
-    private fun videoJson(v: Video) = JSONObject()
+    fun videoJson(v: Video): JSONObject = JSONObject()
         .put("url", v.url).put("title", v.title).put("thumb", v.thumbnail ?: "")
         .put("channel", v.channel).put("channelUrl", v.channelUrl ?: "").put("avatar", v.channelAvatar ?: "")
         .put("dur", v.durationSec).put("views", v.views).put("uploaded", v.uploaded ?: "").put("live", v.live)
 
-    private fun videoFrom(o: JSONObject) = Video(
+    fun videoFrom(o: JSONObject) = Video(
         url = o.getString("url"), title = o.getString("title"), thumbnail = o.optString("thumb").ifEmpty { null },
         channel = o.optString("channel"), channelUrl = o.optString("channelUrl").ifEmpty { null },
         channelAvatar = o.optString("avatar").ifEmpty { null }, durationSec = o.optLong("dur"),
@@ -131,5 +131,62 @@ object Feed {
         } finally {
             loading.value = false
         }
+    }
+}
+
+/** Home feed saved from last time, so Home shows instantly when the app opens. */
+object HomeCache {
+    private lateinit var file: File
+
+    fun init(context: Context) {
+        file = File(context.filesDir, "home.json")
+    }
+
+    fun load(): List<Video> = try {
+        val arr = JSONArray(file.readText())
+        (0 until arr.length()).mapNotNull { runCatching { Library.videoFrom(arr.getJSONObject(it)) }.getOrNull() }
+    } catch (_: Throwable) {
+        emptyList()
+    }
+
+    fun save(items: List<Item>) {
+        val arr = JSONArray()
+        items.filterIsInstance<Video>().take(30).forEach { arr.put(Library.videoJson(it)) }
+        val text = arr.toString()
+        Thread { runCatching { file.writeText(text) } }.start()
+    }
+}
+
+/** The topic chips on Home. You can add and remove your own. */
+object Topics {
+    private lateinit var app: Context
+    val list = MutableStateFlow<List<String>>(emptyList())
+    private val defaults = listOf("Music", "Mixes", "Telugu cinema", "Gaming", "News", "Live", "Comedy", "Cricket", "Podcasts")
+
+    fun init(context: Context) {
+        app = context.applicationContext
+        val saved = app.getSharedPreferences("topics", Context.MODE_PRIVATE).getString("list", null)
+        list.value = saved?.split('\n')?.filter { it.isNotBlank() } ?: defaults
+    }
+
+    fun set(items: List<String>) {
+        list.value = items.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        app.getSharedPreferences("topics", Context.MODE_PRIVATE).edit().putString("list", list.value.joinToString("\n")).apply()
+    }
+}
+
+/** Remembers when you last opened the notifications list, to show a dot for new uploads. */
+object Notifications {
+    private lateinit var app: Context
+    val lastSeen = MutableStateFlow(0L)
+
+    fun init(context: Context) {
+        app = context.applicationContext
+        lastSeen.value = app.getSharedPreferences("notif", Context.MODE_PRIVATE).getLong("seen", System.currentTimeMillis())
+    }
+
+    fun markSeen() {
+        lastSeen.value = System.currentTimeMillis()
+        app.getSharedPreferences("notif", Context.MODE_PRIVATE).edit().putLong("seen", lastSeen.value).apply()
     }
 }

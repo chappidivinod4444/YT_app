@@ -43,6 +43,8 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -118,103 +120,312 @@ fun AppBar(title: String, nav: Nav, showBack: Boolean = false, actions: @Composa
 // ------------------------------------------------------------------- home
 
 @Composable
-fun HomeScreen(nav: Nav) {
-    val subs by Library.subscriptions.collectAsState()
-    val kiosks = remember { mutableStateOf<List<String>>(emptyList()) }
-    LaunchedEffect(Unit) { kiosks.value = withContext(Dispatchers.IO) { Yt.kiosks() } }
-    var tab by rememberSaveable { mutableStateOf(if (Library.subscriptions.value.isNotEmpty()) "subs" else "") }
-    val tabs = buildList {
-        if (subs.isNotEmpty()) add("subs")
-        addAll(kiosks.value)
+fun BellButton(onClick: () -> Unit) {
+    val feed by Feed.videos.collectAsState()
+    val seen by app.vidflow.core.Notifications.lastSeen.collectAsState()
+    val hasNew = feed.orEmpty().any { (it.uploadedAtMillis ?: 0) > seen }
+    Box {
+        IconButton(onClick = onClick) { Icon(Icons.Filled.Notifications, contentDescription = "New uploads") }
+        if (hasNew) Box(
+            Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 12.dp, end = 12.dp)
+                .size(8.dp)
+                .clip(androidx.compose.foundation.shape.CircleShape)
+                .background(Color(0xFFFF4D4D))
+        )
     }
-    if (tab.isEmpty() && tabs.isNotEmpty()) tab = tabs.first()
+}
 
-    // A few shorts for the shelf on Home.
-    var shelf by remember { mutableStateOf<List<Video>>(emptyList()) }
+@Composable
+fun HomeScreen(nav: Nav, openExplore: () -> Unit, openNotifications: () -> Unit) {
+    val topics by app.vidflow.core.Topics.list.collectAsState()
+    var tab by rememberSaveable { mutableStateOf("All") }
+    var editTopics by remember { mutableStateOf(false) }
+
+    // Shorts for the grid on Home, kept between visits.
+    var shelf by remember { mutableStateOf(HomeShorts.items) }
     LaunchedEffect(Unit) {
-        if (shelf.isEmpty()) shelf = withContext(Dispatchers.IO) {
-            runCatching { Yt.shortsFeed(Library.subscriptions.value.map { it.url }).items.filterIsInstance<Video>().take(12) }.getOrDefault(emptyList())
+        if (shelf.isEmpty()) {
+            shelf = withContext(Dispatchers.IO) {
+                runCatching { Yt.shortsFeed(Library.subscriptions.value.map { it.url }).items.filterIsInstance<Video>().take(4) }
+                    .getOrDefault(emptyList())
+            }
+            HomeShorts.items = shelf
         }
+        // Keep the subscriptions feed fresh in the background for the bell and Home.
+        if (Feed.videos.value == null || Feed.stale()) withContext(Dispatchers.IO) { runCatching { Feed.refresh() } }
     }
 
     val header: androidx.compose.foundation.lazy.LazyListScope.() -> Unit = {
-        item(key = "appbar", contentType = "appbar") { AppBar("Vidflow", nav) }
+        item(key = "appbar", contentType = "appbar") {
+            AppBar("Vidflow", nav) { BellButton(openNotifications) }
+        }
         stickyHeader(key = "chips", contentType = "chips") {
             LazyRow(
                 contentPadding = PaddingValues(horizontal = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(MaterialTheme.colorScheme.background)
                     .padding(bottom = 8.dp),
             ) {
-                items(tabs) { t ->
-                    FilterChip(
-                        selected = tab == t,
-                        onClick = { tab = t },
-                        label = { Text(if (t == "subs") "Subscriptions" else Yt.kioskName(t)) },
-                    )
+                item {
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                            .clickable(onClick = openExplore)
+                            .padding(horizontal = 12.dp, vertical = 7.dp)
+                    ) { Text("\uD83E\uDDED", fontSize = 16.sp) }
+                }
+                items(listOf("All") + topics) { t ->
+                    TopicChip(t, selected = tab == t) { tab = t }
+                }
+                item {
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { editTopics = true }
+                            .padding(horizontal = 10.dp, vertical = 7.dp)
+                    ) { Text("+ Edit", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold) }
                 }
             }
         }
     }
 
-    when {
-        tab == "subs" -> SubscriptionFeed(nav, header)
-        tab.isNotEmpty() -> PagedColumn(
-            key = "kiosk-$tab", nav = nav, load = { Yt.kiosk(tab) }, header = header,
-            insert = { ShortsShelf(shelf, nav) },
+    if (tab == "All") {
+        PagedColumn(
+            key = "home-all", nav = nav, load = { Yt.recommended() }, header = header,
+            insert = { ShortsGrid(shelf, nav) },
+            cached = { app.vidflow.core.HomeCache.load() },
+            onLoaded = { app.vidflow.core.HomeCache.save(it) },
         )
-        else -> Column(Modifier.fillMaxSize()) {
-            AppBar("Vidflow", nav)
-            SkeletonCards()
+    } else {
+        val t = tab
+        PagedColumn(key = "topic-$t", nav = nav, load = { Yt.topic(t) }, header = header)
+    }
+
+    if (editTopics) TopicEditor(topics) { editTopics = false }
+}
+
+/** Remembered between visits to Home. */
+object HomeShorts {
+    var items: List<Video> = emptyList()
+}
+
+@Composable
+fun TopicChip(text: String, selected: Boolean, onClick: () -> Unit) {
+    Text(
+        text,
+        fontWeight = FontWeight.SemiBold,
+        color = if (selected) MaterialTheme.colorScheme.background else MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.surfaceContainerHigh)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 7.dp),
+    )
+}
+
+@Composable
+private fun TopicEditor(current: List<String>, onClose: () -> Unit) {
+    var text by remember { mutableStateOf(current.joinToString("\n")) }
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Your topics") },
+        text = {
+            Column {
+                Text(
+                    "One per line. Each becomes a chip on Home, for example: Telugu cinema, Cricket, Tech reviews.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                androidx.compose.material3.OutlinedTextField(
+                    value = text, onValueChange = { text = it },
+                    minLines = 5, modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { app.vidflow.core.Topics.set(text.split('\n')); onClose() }) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onClose) { Text("Cancel") } },
+    )
+}
+
+/** Two-by-two grid of shorts, like a shelf in the feed. */
+@Composable
+fun ShortsGrid(shorts: List<Video>, nav: Nav) {
+    if (shorts.isEmpty()) return
+    Column(Modifier.padding(bottom = 18.dp)) {
+        Row(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .size(26.dp)
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(Brush.linearGradient(listOf(Color(0xFF7C5CFF), Color(0xFF4DD0C8)))),
+                contentAlignment = Alignment.Center,
+            ) { Text("\u26A1", fontSize = 14.sp) }
+            Spacer(Modifier.width(10.dp))
+            Text("Shorts", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         }
-    }
-}
-
-@Composable
-private fun SearchPrompt(nav: Nav) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(40.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Loading()
-        TextButton(onClick = nav.search) { Text("Search for something to watch") }
-    }
-}
-
-@Composable
-private fun SubscriptionFeed(nav: Nav, header: androidx.compose.foundation.lazy.LazyListScope.() -> Unit) {
-    val videos by Feed.videos.collectAsState()
-    val loading by Feed.loading.collectAsState()
-    val scope = rememberCoroutineScope()
-    LaunchedEffect(Unit) {
-        if (videos == null || Feed.stale()) withContext(Dispatchers.IO) { Feed.refresh() }
-    }
-    LazyColumn(contentPadding = PaddingValues(bottom = 90.dp), modifier = Modifier.fillMaxSize()) {
-        header()
-        item {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Latest from your channels", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-                IconButton(enabled = !loading, onClick = { scope.launch(Dispatchers.IO) { Feed.refresh() } }) {
-                    Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
+        shorts.take(4).chunked(2).forEachIndexed { row, pair ->
+            Row(
+                Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                pair.forEachIndexed { col, s ->
+                    val index = row * 2 + col
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .aspectRatio(9f / 16f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                            .clickable { nav.shorts(shorts, index) }
+                    ) {
+                        AsyncImage(model = s.thumbnail, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                        Column(
+                            Modifier
+                                .align(Alignment.BottomStart)
+                                .fillMaxWidth()
+                                .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xC0000000))))
+                                .padding(10.dp)
+                        ) {
+                            Text(s.title, color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            if (s.views >= 0) Text(formatCount(s.views) + " views", color = Color(0xCCFFFFFF), style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
                 }
+                if (pair.size == 1) Spacer(Modifier.weight(1f))
             }
         }
-        val list = videos
+    }
+}
+
+/** Popular lists (the old categories), reached from the compass chip. */
+@Composable
+fun ExploreScreen(nav: Nav) {
+    val kiosks = remember { mutableStateOf<List<String>>(emptyList()) }
+    LaunchedEffect(Unit) { kiosks.value = withContext(Dispatchers.IO) { Yt.kiosks() } }
+    var tab by rememberSaveable { mutableStateOf("") }
+    if (tab.isEmpty() && kiosks.value.isNotEmpty()) tab = kiosks.value.first()
+    val header: androidx.compose.foundation.lazy.LazyListScope.() -> Unit = {
+        item { AppBar("Explore", nav, showBack = true) }
+        item {
+            LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 8.dp)) {
+                items(kiosks.value) { k -> TopicChip(Yt.kioskName(k), tab == k) { tab = k } }
+            }
+        }
+    }
+    if (tab.isEmpty()) Column { AppBar("Explore", nav, showBack = true); SkeletonCards() }
+    else PagedColumn(key = "kiosk-$tab", nav = nav, load = { Yt.kiosk(tab) }, header = header)
+}
+
+/** New uploads from your channels since you last looked. */
+@Composable
+fun NotificationsScreen(nav: Nav) {
+    val feed by Feed.videos.collectAsState()
+    val seenAt = remember { app.vidflow.core.Notifications.lastSeen.value }
+    DisposableEffect(Unit) { onDispose { app.vidflow.core.Notifications.markSeen() } }
+    LazyColumn(contentPadding = PaddingValues(bottom = 90.dp), modifier = Modifier.fillMaxSize()) {
+        item { AppBar("New uploads", nav, showBack = true) }
+        val list = feed
         when {
-            list == null || (loading && list.isEmpty()) -> item { SkeletonCards() }
+            list == null -> item { SkeletonRows() }
             list.isEmpty() -> item {
                 Text(
-                    "No new videos. Subscribe to channels to see their uploads here.",
+                    "Subscribe to channels to see their new videos here.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth().padding(32.dp),
                 )
             }
-            else -> items(list, key = { it.url }, contentType = { "video" }) { VideoCard(it, nav) }
+            else -> items(list.take(60), key = { "n-" + it.url }) { v ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier
+                            .padding(start = 8.dp)
+                            .size(6.dp)
+                            .clip(androidx.compose.foundation.shape.CircleShape)
+                            .background(if ((v.uploadedAtMillis ?: 0) > seenAt) MaterialTheme.colorScheme.primary else Color.Transparent)
+                    )
+                    Box(Modifier.weight(1f)) { VideoRow(v, nav) }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------- subscriptions
+
+@Composable
+fun SubscriptionsScreen(nav: Nav) {
+    val subs by Library.subscriptions.collectAsState()
+    val videos by Feed.videos.collectAsState()
+    val loading by Feed.loading.collectAsState()
+    val scope = rememberCoroutineScope()
+    var channel by rememberSaveable { mutableStateOf<String?>(null) }
+    val state = remember { ListCache.state("subs-tab") }
+    LaunchedEffect(Unit) {
+        if (videos == null || Feed.stale()) withContext(Dispatchers.IO) { runCatching { Feed.refresh() } }
+    }
+    @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+    androidx.compose.material3.pulltorefresh.PullToRefreshBox(
+        isRefreshing = loading,
+        onRefresh = { scope.launch(Dispatchers.IO) { runCatching { Feed.refresh() } } },
+    ) {
+        LazyColumn(state = state, contentPadding = PaddingValues(bottom = 90.dp), modifier = Modifier.fillMaxSize()) {
+            item { AppBar("Subscriptions", nav) }
+            if (subs.isNotEmpty()) {
+                item {
+                    LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        items(subs, key = { it.url }) { s ->
+                            Column(
+                                Modifier
+                                    .width(64.dp)
+                                    .clickable { nav.channel(s.url) },
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                            ) {
+                                Avatar(s.avatar, 56)
+                                Text(s.name, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
+                            }
+                        }
+                    }
+                }
+                item {
+                    LazyRow(contentPadding = PaddingValues(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        item { TopicChip("All", channel == null) { channel = null } }
+                        item { TopicChip("Today", channel == "today") { channel = "today" } }
+                        item { TopicChip("Shorts", channel == "shorts") { channel = "shorts" } }
+                    }
+                }
+            }
+            val all = videos
+            val dayAgo = System.currentTimeMillis() - 24 * 3600 * 1000
+            val list = when (channel) {
+                "today" -> all?.filter { (it.uploadedAtMillis ?: 0) > dayAgo }
+                "shorts" -> all?.filter { it.short || it.durationSec in 1..60 }
+                else -> all?.filter { !it.short }
+            }
+            when {
+                subs.isEmpty() -> item {
+                    Text(
+                        "You haven't subscribed to any channels yet. Open a channel and tap Subscribe, or import your subscriptions in the You tab.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(32.dp),
+                    )
+                }
+                list == null -> item { SkeletonCards() }
+                list.isEmpty() -> item {
+                    Text("Nothing new here.", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(32.dp))
+                }
+                else -> items(list, key = { "s-" + it.url }, contentType = { "video" }) { VideoCard(it, nav) }
+            }
         }
     }
 }
@@ -471,7 +682,7 @@ fun LibraryScreen(nav: Nav, openLiked: () -> Unit = {}, openPlaylists: () -> Uni
     var confirmClear by remember { mutableStateOf(false) }
 
     LazyColumn(contentPadding = PaddingValues(bottom = 90.dp), modifier = Modifier.fillMaxSize()) {
-        item { AppBar("Library", nav) }
+        item { AppBar("You", nav) }
         item { AccountSection(nav, openLiked, openPlaylists, say) }
         item {
             Text("Subscriptions", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(16.dp, 8.dp))

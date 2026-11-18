@@ -432,12 +432,15 @@ class PagedList {
     val items = mutableStateListOf<Item>()
     var next: (suspend () -> Paged)? by mutableStateOf(null)
     var loading by mutableStateOf(false)
+    var refreshing by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
+    var loadedAt = 0L
 
     fun set(p: Paged) {
         items.clear()
         items.addAll(p.items)
         next = p.next
+        loadedAt = System.currentTimeMillis()
     }
 
     suspend fun loadMore() {
@@ -457,7 +460,24 @@ class PagedList {
     }
 }
 
-/** A scrolling list that loads the first page with [load] and more pages automatically. */
+/**
+ * Lists and scroll positions survive switching tabs and opening videos,
+ * so going back is instant instead of loading again.
+ */
+object ListCache {
+    private val lists = HashMap<String, PagedList>()
+    private val states = HashMap<String, androidx.compose.foundation.lazy.LazyListState>()
+
+    fun list(key: String): PagedList = lists.getOrPut(key) { PagedList() }
+    fun state(key: String) = states.getOrPut(key) { androidx.compose.foundation.lazy.LazyListState() }
+    fun drop(key: String) {
+        lists.remove(key)
+        states.remove(key)
+    }
+}
+
+/** A scrolling list that loads the first page with [load] and more pages automatically. Pull down to refresh. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun PagedColumn(
     key: Any,
@@ -466,61 +486,84 @@ fun PagedColumn(
     bigVideos: Boolean = true,
     /** Shown after the 3rd item (e.g. a Shorts shelf). */
     insert: (@Composable () -> Unit)? = null,
+    /** Shows saved items instantly while fresh ones load (e.g. Home from last time). */
+    cached: (() -> List<Item>)? = null,
+    onLoaded: ((List<Item>) -> Unit)? = null,
     header: LazyListScope.() -> Unit = {},
 ) {
-    val list = remember(key) { PagedList() }
+    val k = key.toString()
+    val list = remember(k) { ListCache.list(k) }
+    val state = remember(k) { ListCache.state(k) }
     val scope = rememberCoroutineScope()
-    var first by remember(key) { mutableStateOf(true) }
-    val state = rememberLazyListState()
 
-    fun reload() {
+    fun reload(pull: Boolean = false) {
         list.error = null
-        list.loading = true
+        if (pull) list.refreshing = true else list.loading = true
         scope.launch {
             try {
-                list.set(withContext(Dispatchers.IO) { load() })
+                val p = withContext(Dispatchers.IO) { load() }
+                list.set(p)
+                onLoaded?.invoke(p.items)
             } catch (t: Throwable) {
-                list.error = friendlyError(t)
+                if (list.items.isEmpty()) list.error = friendlyError(t)
             } finally {
                 list.loading = false
-                first = false
+                list.refreshing = false
             }
         }
     }
 
-    LaunchedEffect(key) { if (list.items.isEmpty()) reload() }
+    LaunchedEffect(k) {
+        if (list.items.isEmpty()) {
+            val saved = cached?.invoke().orEmpty()
+            if (saved.isNotEmpty()) {
+                list.items.addAll(saved)
+                reload(pull = true)
+            } else {
+                reload()
+            }
+        } else if (System.currentTimeMillis() - list.loadedAt > 30 * 60 * 1000) {
+            reload(pull = true)
+        }
+    }
 
-    val nearEnd by remember {
+    val nearEnd by remember(k) {
         derivedStateOf {
             val last = state.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            last >= state.layoutInfo.totalItemsCount - 4
+            last >= state.layoutInfo.totalItemsCount - 5
         }
     }
     LaunchedEffect(nearEnd, list.items.size) {
         if (nearEnd && list.next != null && !list.loading) list.loadMore()
     }
 
-    LazyColumn(state = state, contentPadding = PaddingValues(bottom = 90.dp), modifier = Modifier.fillMaxSize()) {
-        header()
-        val err = list.error
-        when {
-            err != null && list.items.isEmpty() -> item { ErrorBox(err) { reload() } }
-            list.items.isEmpty() && (list.loading || first) -> item { if (bigVideos) SkeletonCards() else SkeletonRows() }
-            list.items.isEmpty() -> item {
-                Text(
-                    "Nothing here yet.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.fillMaxWidth().padding(32.dp),
-                    textAlign = TextAlign.Center,
-                )
+    androidx.compose.material3.pulltorefresh.PullToRefreshBox(
+        isRefreshing = list.refreshing,
+        onRefresh = { reload(pull = true) },
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        LazyColumn(state = state, contentPadding = PaddingValues(bottom = 90.dp), modifier = Modifier.fillMaxSize()) {
+            header()
+            val err = list.error
+            when {
+                err != null && list.items.isEmpty() -> item { ErrorBox(err) { reload() } }
+                list.items.isEmpty() && list.loading -> item { if (bigVideos) SkeletonCards() else SkeletonRows() }
+                list.items.isEmpty() && !list.refreshing -> item {
+                    Text(
+                        "Nothing here yet.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth().padding(32.dp),
+                        textAlign = TextAlign.Center,
+                    )
+                }
             }
+            val split = if (insert != null) minOf(3, list.items.size) else list.items.size
+            items(list.items.subList(0, split), key = { it.url }, contentType = { it::class }) { ItemView(it, nav, bigVideos) }
+            if (insert != null && list.items.isNotEmpty()) item(key = "insert", contentType = "insert") { insert() }
+            if (split < list.items.size) {
+                items(list.items.subList(split, list.items.size), key = { it.url }, contentType = { it::class }) { ItemView(it, nav, bigVideos) }
+            }
+            if (list.loading && list.items.isNotEmpty()) item { Loading() }
         }
-        val split = if (insert != null) minOf(3, list.items.size) else list.items.size
-        items(list.items.subList(0, split), key = { it.url }, contentType = { it::class }) { ItemView(it, nav, bigVideos) }
-        if (insert != null && list.items.isNotEmpty()) item(key = "insert", contentType = "insert") { insert() }
-        if (split < list.items.size) {
-            items(list.items.subList(split, list.items.size), key = { it.url }, contentType = { it::class }) { ItemView(it, nav, bigVideos) }
-        }
-        if (list.loading && list.items.isNotEmpty()) item { Loading() }
     }
 }

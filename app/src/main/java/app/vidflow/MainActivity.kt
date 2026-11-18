@@ -30,6 +30,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -55,6 +56,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.Player
+import coil3.request.crossfade
 import app.vidflow.core.Library
 import app.vidflow.core.Video
 import app.vidflow.core.Yt
@@ -83,6 +85,16 @@ class VidflowApp : Application() {
         app.vidflow.core.GoogleAccount.init(this)
         app.vidflow.core.Prefs.init(this)
         app.vidflow.core.SeenShorts.init(this)
+        app.vidflow.core.HomeCache.init(this)
+        app.vidflow.core.Topics.init(this)
+        app.vidflow.core.Notifications.init(this)
+        // Smooth fade-in for thumbnails.
+        coil3.SingletonImageLoader.setSafe { ctx ->
+            coil3.ImageLoader.Builder(ctx)
+                .components { add(coil3.network.okhttp.OkHttpNetworkFetcherFactory()) }
+                .crossfade(true)
+                .build()
+        }
         PlayerHolder.init(this)
     }
 }
@@ -91,6 +103,9 @@ sealed interface Screen {
     data object Home : Screen
     data object Library : Screen
     data object Search : Screen
+    data object Subscriptions : Screen
+    data object Explore : Screen
+    data object NotificationsList : Screen
     data object Shorts : Screen
     data class ShortsFrom(val list: List<Video>, val index: Int) : Screen
     data object Liked : Screen
@@ -270,7 +285,10 @@ private fun Root(activity: MainActivity) {
         Column(Modifier.fillMaxSize().safeDrawingPadding()) {
             Box(Modifier.weight(1f)) {
                 when (top) {
-                    Screen.Home -> HomeScreen(nav)
+                    Screen.Home -> HomeScreen(nav, openExplore = { push(Screen.Explore) }, openNotifications = { push(Screen.NotificationsList) })
+                    Screen.Subscriptions -> app.vidflow.ui.SubscriptionsScreen(nav)
+                    Screen.Explore -> app.vidflow.ui.ExploreScreen(nav)
+                    Screen.NotificationsList -> app.vidflow.ui.NotificationsScreen(nav)
                     Screen.Library -> LibraryScreen(
                         nav,
                         openLiked = { push(Screen.Liked) },
@@ -296,8 +314,13 @@ private fun Root(activity: MainActivity) {
             if (playing != null && top !is Screen.Watch && top != Screen.Shorts && top !is Screen.ShortsFrom && !playing.short) {
                 MiniPlayer(playing, onOpen = { push(Screen.Watch(playing)) }, onClose = { PlayerHolder.stop() })
             }
-            if (top == Screen.Home || top == Screen.Library || top == Screen.Shorts) {
-                NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainerLow, modifier = Modifier.height(64.dp)) {
+            val isTab = top == Screen.Home || top == Screen.Library || top == Screen.Shorts || top == Screen.Subscriptions
+            if (isTab) {
+                NavigationBar(
+                    containerColor = if (top == Screen.Shorts) Color.Black else MaterialTheme.colorScheme.background,
+                    tonalElevation = 0.dp,
+                    modifier = Modifier.height(64.dp),
+                ) {
                     NavigationBarItem(
                         selected = top == Screen.Home,
                         onClick = { stack.clear(); stack.add(Screen.Home); tab = Screen.Home },
@@ -311,10 +334,19 @@ private fun Root(activity: MainActivity) {
                         label = { Text("Shorts") },
                     )
                     NavigationBarItem(
+                        selected = top == Screen.Subscriptions,
+                        onClick = { stack.clear(); stack.add(Screen.Subscriptions); tab = Screen.Subscriptions },
+                        icon = { Icon(Icons.Filled.PlayArrow, contentDescription = null) },
+                        label = { Text("Subscriptions") },
+                    )
+                    NavigationBarItem(
                         selected = top == Screen.Library,
                         onClick = { stack.clear(); stack.add(Screen.Library); tab = Screen.Library },
-                        icon = { Icon(Icons.Filled.PlayArrow, contentDescription = null) },
-                        label = { Text("Library") },
+                        icon = {
+                            val avatar by GoogleAccount.avatar.collectAsState()
+                            if (avatar != null) app.vidflow.ui.Avatar(avatar, 26) else Icon(Icons.Filled.Person, contentDescription = null)
+                        },
+                        label = { Text("You") },
                     )
                 }
             }

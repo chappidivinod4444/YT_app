@@ -200,6 +200,101 @@ object Yt {
 
     fun related(info: StreamInfo): List<Item> = info.relatedItems.items()
 
+    // ---- home
+
+    /**
+     * A home feed like a recommendation page: videos related to what you watched recently,
+     * new uploads from your channels, and popular videos, mixed together.
+     */
+    fun recommended(): Paged {
+        val history = Library.history.value
+        val watched = history.map { it.video.url }.toHashSet()
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(4)
+        val related = try {
+            history.take(6).map { it.video.url }.map { url ->
+                pool.submit<List<Video>> {
+                    try {
+                        related(stream(url)).filterIsInstance<Video>().filter { !it.short }.shuffled().take(8)
+                    } catch (_: Throwable) {
+                        emptyList()
+                    }
+                }
+            }.map { runCatching { it.get() }.getOrDefault(emptyList()) }
+        } finally {
+            pool.shutdown()
+        }
+        val fromSubs = Feed.videos.value.orEmpty().filter { !it.short }.take(12)
+        val kioskId = kiosks().firstOrNull()
+        val popular = kioskId?.let { runCatching { kiosk(it) }.getOrNull() }
+        val sources = (related + listOf(fromSubs, popular?.items?.filterIsInstance<Video>().orEmpty()))
+            .map { it.toMutableList() }.filter { it.isNotEmpty() }
+        val mixed = ArrayList<Video>()
+        var i = 0
+        while (sources.any { it.isNotEmpty() }) {
+            val l = sources[i % sources.size]
+            if (l.isNotEmpty()) mixed.add(l.removeAt(0))
+            i++
+        }
+        val items = mixed.distinctBy { it.url }.filter { it.url !in watched }
+        return Paged(items, popular?.next)
+    }
+
+    /** Videos for a topic chip like "Music" or "Telugu cinema". */
+    fun topic(name: String): Paged {
+        val p = search(name, "videos")
+        return Paged(p.items.filter { it !is Video || !it.short }, p.next)
+    }
+
+    // ---- comments
+
+    class Comment(
+        val author: String,
+        val authorUrl: String?,
+        val avatar: String?,
+        val text: String,
+        val likes: Int,
+        val date: String?,
+        val replyCount: Int,
+        val replies: Page?,
+        val pinned: Boolean,
+        val hearted: Boolean,
+    )
+
+    class CommentPage(val comments: List<Comment>, val next: (suspend () -> CommentPage)?, val disabled: Boolean = false)
+
+    private fun toComment(c: org.schabi.newpipe.extractor.comments.CommentsInfoItem) = Comment(
+        author = c.uploaderName ?: "",
+        authorUrl = c.uploaderUrl,
+        avatar = c.uploaderAvatars.best(120),
+        text = (c.commentText?.content ?: "")
+            .replace(Regex("<br\\s*/?>"), "\n").replace(Regex("<[^>]+>"), "")
+            .replace("&amp;", "&").replace("&quot;", "\"").replace("&#39;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+        likes = c.likeCount,
+        date = c.textualUploadDate,
+        replyCount = c.replyCount,
+        replies = c.replies,
+        pinned = c.isPinned,
+        hearted = c.isHeartedByUploader,
+    )
+
+    private fun morePages(url: String, page: Page?): (suspend () -> CommentPage)? = page?.let { pg ->
+        {
+            val more = org.schabi.newpipe.extractor.comments.CommentsInfo.getMoreItems(service, url, pg)
+            CommentPage(more.items.map { toComment(it) }, morePages(url, more.nextPage))
+        }
+    }
+
+    fun comments(url: String): CommentPage {
+        val info = org.schabi.newpipe.extractor.comments.CommentsInfo.getInfo(service, url)
+        if (info.isCommentsDisabled) return CommentPage(emptyList(), null, disabled = true)
+        return CommentPage(info.relatedItems.map { toComment(it) }, morePages(url, info.nextPage))
+    }
+
+    fun replies(url: String, page: Page): CommentPage {
+        val more = org.schabi.newpipe.extractor.comments.CommentsInfo.getMoreItems(service, url, page)
+        return CommentPage(more.items.map { toComment(it) }, morePages(url, more.nextPage))
+    }
+
     // ---- channel
 
     class ChannelPage(val info: ChannelInfo, val videos: Paged) {
@@ -339,12 +434,21 @@ object Yt {
 
 // ---------------------------------------------------------------- format
 
-fun formatCount(n: Long): String = when {
+fun formatCount(n: Long): String = if (Locale.getDefault().country == "IN") formatIndian(n) else when {
     n < 0 -> ""
     n < 1_000 -> n.toString()
     n < 1_000_000 -> trim(n / 1_000.0) + "K"
     n < 1_000_000_000 -> trim(n / 1_000_000.0) + "M"
     else -> trim(n / 1_000_000_000.0) + "B"
+}
+
+/** Indian style: 45K, 62 lakh, 3.2 crore. */
+private fun formatIndian(n: Long): String = when {
+    n < 0 -> ""
+    n < 1_000 -> n.toString()
+    n < 100_000 -> trim(n / 1_000.0) + "K"
+    n < 10_000_000 -> trim(n / 100_000.0) + " lakh"
+    else -> trim(n / 10_000_000.0) + " crore"
 }
 
 private fun trim(d: Double): String = if (d >= 10) d.toLong().toString() else String.format(Locale.US, "%.1f", d).removeSuffix(".0")
