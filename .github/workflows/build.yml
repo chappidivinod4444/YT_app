@@ -1,0 +1,14 @@
+name: Build APK
+on:
+  push:
+    branches: [main]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          set +e
+          curl -s https://jitpack.io/api/builds/com.github.TeamNewPipe/NewPipeExtractor/latest | sed 's/^/LATEST /'; echo
+          curl -s "https://api.github.com/repos/TeamNewPipe/NewPipeExtractor/releases?per_page=5" | grep -E '"tag_name"|"published_at"' | sed 's/^/REL /'
+          curl -s "https://api.github.com/repos/TeamNewPipe/NewPipe/contents/app/build.gradle?ref=master" | python3 -c "import sys,json,base64;t=base64.b64decode(json.load(sys.stdin)['content']).decode();[print('NP',l) for l in t.splitlines() if any(k in l for k in ['NewPipeExtractor','extractor','desugar','exoplayer','media3','compileSdk','minSdk','okhttp'])]"
+          curl -s "https://api.github.com/repos/TeamNewPipe/NewPipe/contents/gradle/libs.versions.toml?ref=dev" | python3 -c "import sys,json,base64;t=base64.b64decode(json.load(sys.stdin)['content']).decode();[print('TOML',l) for l in t.splitlines() if any(k in l.lower() for k in ['extractor','desugar','exoplayer','media3','okhttp','jsoup','rhino'])]"
