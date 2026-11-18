@@ -11,14 +11,15 @@ jobs:
         with: {distribution: temurin, java-version: 17}
       - uses: gradle/actions/setup-gradle@v4
         with: {gradle-version: "8.11.1"}
-      - name: API dump
-        run: |
-          set +e
-          mkdir /tmp/x && cd /tmp/x
-          curl -sL -o e.jar https://jitpack.io/com/github/TeamNewPipe/NewPipeExtractor/extractor/v0.27.1/extractor-v0.27.1.jar
-          ls -la e.jar
-          for c in org.schabi.newpipe.extractor.services.youtube.YoutubeParsingHelper org.schabi.newpipe.extractor.services.youtube.dashmanifestcreators.YoutubeProgressiveDashManifestCreator org.schabi.newpipe.extractor.services.youtube.ItagItem org.schabi.newpipe.extractor.stream.Stream org.schabi.newpipe.extractor.services.youtube.PoTokenProvider org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeStreamExtractor; do
-            javap -cp e.jar -public $c 2>&1 | grep -iE "class |interface |UserAgent|isWebStreamingUrl|isAndroid|isIos|isTvHtml|StreamingUrl|fromItag|ItagItem|getCache|fromStreamingUrl|getManifest|PoToken|getContent|isUrl|DeliveryMethod" | sed 's/^/API /'
-          done
       - name: Probe
         run: gradle testDebugUnitTest --no-daemon
+
+      - name: API dump
+        if: always()
+        run: |
+          set +e
+          J=$(find ~/.gradle -name "*xtractor*v0.27.1*.jar" | grep -v sources | head -3); echo "JARS $J"
+          CP=$(echo $J | tr ' ' ':')
+          for c in org.schabi.newpipe.extractor.services.youtube.YoutubeParsingHelper org.schabi.newpipe.extractor.services.youtube.dashmanifestcreators.YoutubeProgressiveDashManifestCreator org.schabi.newpipe.extractor.services.youtube.ItagItem org.schabi.newpipe.extractor.stream.Stream org.schabi.newpipe.extractor.services.youtube.PoTokenProvider org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeStreamExtractor; do
+            javap -cp "$CP" -public $c 2>&1 | grep -iE "class |interface |UserAgent|StreamingUrl|fromItag|getCache|fromStreamingUrl|PoToken|getContent|isUrl|DeliveryMethod|Error" | sed 's/^/API /'
+          done
