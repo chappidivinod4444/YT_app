@@ -8,7 +8,7 @@ import org.schabi.newpipe.extractor.ServiceList
 import org.schabi.newpipe.extractor.search.SearchInfo
 import org.schabi.newpipe.extractor.stream.StreamInfo
 
-class ProbeTest {
+class LiveCheckTest {
     @Test
     fun probe() {
         val dl = HttpDownloader()

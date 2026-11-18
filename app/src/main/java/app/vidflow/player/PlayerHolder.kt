@@ -1,0 +1,208 @@
+@file:androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+
+package app.vidflow.player
+
+import android.content.ComponentName
+import android.content.Context
+import android.net.Uri
+import android.os.Handler
+import android.os.Looper
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.dash.DashMediaSource
+import androidx.media3.exoplayer.dash.manifest.DashManifestParser
+import androidx.media3.exoplayer.hls.HlsMediaSource
+import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.exoplayer.source.MergingMediaSource
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
+import app.vidflow.core.HttpDownloader
+import app.vidflow.core.Library
+import app.vidflow.core.Video
+import app.vidflow.core.best
+import kotlinx.coroutines.flow.MutableStateFlow
+import okhttp3.OkHttpClient
+import org.schabi.newpipe.extractor.MediaFormat
+import org.schabi.newpipe.extractor.services.youtube.dashmanifestcreators.YoutubeProgressiveDashManifestCreator
+import org.schabi.newpipe.extractor.stream.AudioStream
+import org.schabi.newpipe.extractor.stream.DeliveryMethod
+import org.schabi.newpipe.extractor.stream.StreamInfo
+import org.schabi.newpipe.extractor.stream.VideoStream
+import java.io.ByteArrayInputStream
+import java.util.concurrent.TimeUnit
+
+/** One shared player for the whole app, so playback continues in the background and in picture-in-picture. */
+object PlayerHolder {
+    lateinit var player: ExoPlayer
+        private set
+    private lateinit var app: Context
+    private val main = Handler(Looper.getMainLooper())
+    private val streamClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .build()
+
+    /** What's loaded right now. */
+    val current = MutableStateFlow<Video?>(null)
+    val info = MutableStateFlow<StreamInfo?>(null)
+    val qualities = MutableStateFlow<List<Int>>(emptyList())
+    val quality = MutableStateFlow(0)
+    val error = MutableStateFlow<String?>(null)
+
+    private var controller: MediaController? = null
+
+    fun init(context: Context) {
+        app = context.applicationContext
+        player = ExoPlayer.Builder(app)
+            .setAudioAttributes(
+                AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(),
+                true,
+            )
+            .setHandleAudioBecomingNoisy(true)
+            .setSeekBackIncrementMs(10_000)
+            .setSeekForwardIncrementMs(10_000)
+            .build()
+        player.addListener(object : Player.Listener {
+            override fun onPlayerError(e: PlaybackException) {
+                error.value = "Couldn't play this video (${e.errorCodeName}). Tap retry."
+            }
+        })
+        // Save where you stopped, every few seconds.
+        main.postDelayed(object : Runnable {
+            override fun run() {
+                val v = current.value
+                if (v != null && player.isPlaying) Library.savePosition(v.url, player.currentPosition)
+                main.postDelayed(this, 5000)
+            }
+        }, 5000)
+    }
+
+    /** Connects to the background service so the media notification appears. */
+    fun connectSession(context: Context) {
+        if (controller != null) return
+        val token = SessionToken(context, ComponentName(context, PlaybackService::class.java))
+        val future = MediaController.Builder(context, token).buildAsync()
+        future.addListener({ controller = runCatching { future.get() }.getOrNull() }, { it.run() })
+    }
+
+    fun preferredHeight(): Int = app.getSharedPreferences("settings", Context.MODE_PRIVATE).getInt("quality", 720)
+
+    fun setPreferredHeight(h: Int) {
+        app.getSharedPreferences("settings", Context.MODE_PRIVATE).edit().putInt("quality", h).apply()
+    }
+
+    /** Must be called on the main thread with info fetched in the background. */
+    fun play(video: Video, streamInfo: StreamInfo, height: Int = preferredHeight(), resumeAt: Long? = null) {
+        error.value = null
+        val sameVideo = current.value?.url == video.url
+        current.value = video
+        info.value = streamInfo
+        val heights = videoChoices(streamInfo).map { it.heightOrParsed() }.filter { it > 0 }.distinct().sortedDescending()
+        qualities.value = heights
+        try {
+            val (source, chosen) = buildSource(video, streamInfo, height)
+            quality.value = chosen
+            val start = resumeAt ?: if (sameVideo) player.currentPosition else Library.position(video.url).let {
+                if (streamInfo.duration > 0 && it > (streamInfo.duration * 1000 - 15_000)) 0 else it
+            }
+            player.setMediaSource(source, start)
+            player.prepare()
+            player.playWhenReady = true
+        } catch (t: Throwable) {
+            error.value = "This video can't be played: ${t.message}"
+        }
+    }
+
+    fun changeQuality(height: Int) {
+        val v = current.value ?: return
+        val i = info.value ?: return
+        setPreferredHeight(height)
+        play(v, i, height, player.currentPosition)
+    }
+
+    fun stop() {
+        current.value?.let { Library.savePosition(it.url, player.currentPosition) }
+        player.stop()
+        player.clearMediaItems()
+        current.value = null
+        info.value = null
+    }
+
+    // ---------------------------------------------------------------- sources
+
+    private fun VideoStream.heightOrParsed(): Int =
+        height.takeIf { it > 0 } ?: resolution.takeWhile { it.isDigit() }.toIntOrNull() ?: 0
+
+    private fun videoChoices(i: StreamInfo): List<VideoStream> =
+        i.videoOnlyStreams.filter { it.isUrl && it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP && it.itagItem != null }
+
+    private fun metadata(v: Video, i: StreamInfo): MediaMetadata = MediaMetadata.Builder()
+        .setTitle(i.name ?: v.title)
+        .setArtist(i.uploaderName ?: v.channel)
+        .setArtworkUri((i.thumbnails.best() ?: v.thumbnail)?.let { Uri.parse(it) })
+        .build()
+
+    private fun mediaItem(uri: String, v: Video, i: StreamInfo) = MediaItem.Builder()
+        .setUri(uri)
+        .setMediaId(v.url)
+        .setMediaMetadata(metadata(v, i))
+        .build()
+
+    /** Picks the streams and builds a media source. Returns it with the chosen height. */
+    private fun buildSource(v: Video, i: StreamInfo, wantHeight: Int): Pair<MediaSource, Int> {
+        val chunked = ChunkedHttpDataSource.Factory(streamClient)
+
+        // Live streams come as HLS playlists.
+        if (i.hlsUrl.isNotEmpty() && (v.live || i.videoOnlyStreams.isEmpty())) {
+            val http = DefaultHttpDataSource.Factory().setUserAgent(HttpDownloader.USER_AGENT)
+            return HlsMediaSource.Factory(http).createMediaSource(mediaItem(i.hlsUrl, v, i)) to 0
+        }
+
+        val videos = videoChoices(i)
+        val audios = i.audioStreams.filter { it.isUrl && it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP && it.itagItem != null }
+        if (videos.isNotEmpty() && audios.isNotEmpty() && i.duration > 0) {
+            // Prefer the chosen height (or the closest below it), H.264 first for smooth hardware decoding.
+            val byHeight = videos.groupBy { it.heightOrParsed() }
+            val target = byHeight.keys.filter { it <= wantHeight }.maxOrNull() ?: byHeight.keys.min()
+            val candidates = byHeight[target].orEmpty()
+            val video = candidates.firstOrNull { it.format == MediaFormat.MPEG_4 } ?: candidates.first()
+            val audio = audios.filter { it.format == MediaFormat.M4A }.maxByOrNull { it.averageBitrate }
+                ?: audios.maxBy { it.averageBitrate }
+            val videoSource = dash(video.content, video.itagItem!!, i.duration, chunked, v, i)
+            val audioSource = dash(audio.content, audio.itagItem!!, i.duration, chunked, v, i)
+            return MergingMediaSource(videoSource, audioSource) to target
+        }
+
+        // Fallback: a single file with video and sound together (lower quality).
+        val muxed = i.videoStreams.filter { it.isUrl && it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP }
+            .maxByOrNull { it.heightOrParsed() }
+        if (muxed != null) {
+            return ProgressiveMediaSource.Factory(chunked).createMediaSource(mediaItem(muxed.content, v, i)) to muxed.heightOrParsed()
+        }
+        // Audio only.
+        val audio: AudioStream = i.audioStreams.filter { it.isUrl }.maxByOrNull { it.averageBitrate }
+            ?: throw IllegalStateException("no playable streams")
+        return ProgressiveMediaSource.Factory(chunked).createMediaSource(mediaItem(audio.content, v, i)) to 0
+    }
+
+    /** Wraps one stream in a small DASH description so the player can seek using its index. */
+    private fun dash(
+        url: String,
+        itag: org.schabi.newpipe.extractor.services.youtube.ItagItem,
+        durationSec: Long,
+        factory: ChunkedHttpDataSource.Factory,
+        v: Video,
+        i: StreamInfo,
+    ): MediaSource {
+        val mpd = YoutubeProgressiveDashManifestCreator.fromProgressiveStreamingUrl(url, itag, durationSec)
+        val manifest = DashManifestParser().parse(Uri.parse(url), ByteArrayInputStream(mpd.toByteArray(Charsets.UTF_8)))
+        return DashMediaSource.Factory(factory).createMediaSource(manifest, mediaItem(url, v, i))
+    }
+}
