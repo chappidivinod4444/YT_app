@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package app.vidflow.ui
 
 import androidx.compose.foundation.background
@@ -127,25 +129,45 @@ fun HomeScreen(nav: Nav) {
     }
     if (tab.isEmpty() && tabs.isNotEmpty()) tab = tabs.first()
 
-    Column(Modifier.fillMaxSize()) {
-        AppBar("Vidflow", nav)
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.padding(bottom = 8.dp),
-        ) {
-            items(tabs) { t ->
-                FilterChip(
-                    selected = tab == t,
-                    onClick = { tab = t },
-                    label = { Text(if (t == "subs") "Subscriptions" else Yt.kioskName(t)) },
-                )
+    // A few shorts for the shelf on Home.
+    var shelf by remember { mutableStateOf<List<Video>>(emptyList()) }
+    LaunchedEffect(Unit) {
+        if (shelf.isEmpty()) shelf = withContext(Dispatchers.IO) {
+            runCatching { Yt.shortsFeed(Library.subscriptions.value.map { it.url }).items.filterIsInstance<Video>().take(12) }.getOrDefault(emptyList())
+        }
+    }
+
+    val header: androidx.compose.foundation.lazy.LazyListScope.() -> Unit = {
+        item(key = "appbar", contentType = "appbar") { AppBar("Vidflow", nav) }
+        stickyHeader(key = "chips", contentType = "chips") {
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.background)
+                    .padding(bottom = 8.dp),
+            ) {
+                items(tabs) { t ->
+                    FilterChip(
+                        selected = tab == t,
+                        onClick = { tab = t },
+                        label = { Text(if (t == "subs") "Subscriptions" else Yt.kioskName(t)) },
+                    )
+                }
             }
         }
-        when {
-            tab == "subs" -> SubscriptionFeed(nav)
-            tab.isNotEmpty() -> PagedColumn(key = "kiosk-$tab", nav = nav, load = { Yt.kiosk(tab) })
-            kiosks.value.isEmpty() -> SearchPrompt(nav)
+    }
+
+    when {
+        tab == "subs" -> SubscriptionFeed(nav, header)
+        tab.isNotEmpty() -> PagedColumn(
+            key = "kiosk-$tab", nav = nav, load = { Yt.kiosk(tab) }, header = header,
+            insert = { ShortsShelf(shelf, nav) },
+        )
+        else -> Column(Modifier.fillMaxSize()) {
+            AppBar("Vidflow", nav)
+            SkeletonCards()
         }
     }
 }
@@ -164,7 +186,7 @@ private fun SearchPrompt(nav: Nav) {
 }
 
 @Composable
-private fun SubscriptionFeed(nav: Nav) {
+private fun SubscriptionFeed(nav: Nav, header: androidx.compose.foundation.lazy.LazyListScope.() -> Unit) {
     val videos by Feed.videos.collectAsState()
     val loading by Feed.loading.collectAsState()
     val scope = rememberCoroutineScope()
@@ -172,6 +194,7 @@ private fun SubscriptionFeed(nav: Nav) {
         if (videos == null || Feed.stale()) withContext(Dispatchers.IO) { Feed.refresh() }
     }
     LazyColumn(contentPadding = PaddingValues(bottom = 90.dp), modifier = Modifier.fillMaxSize()) {
+        header()
         item {
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Latest from your channels", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
@@ -182,7 +205,7 @@ private fun SubscriptionFeed(nav: Nav) {
         }
         val list = videos
         when {
-            list == null || (loading && list.isEmpty()) -> item { Loading() }
+            list == null || (loading && list.isEmpty()) -> item { SkeletonCards() }
             list.isEmpty() -> item {
                 Text(
                     "No new videos. Subscribe to channels to see their uploads here.",
@@ -191,7 +214,7 @@ private fun SubscriptionFeed(nav: Nav) {
                     modifier = Modifier.fillMaxWidth().padding(32.dp),
                 )
             }
-            else -> items(list, key = { it.url }) { VideoCard(it, nav) }
+            else -> items(list, key = { it.url }, contentType = { "video" }) { VideoCard(it, nav) }
         }
     }
 }
@@ -369,6 +392,27 @@ fun ChannelScreen(url: String, nav: Nav) {
 }
 
 @Composable
+fun PlaybackSettings() {
+    val mode by app.vidflow.core.Prefs.leaveMode.collectAsState()
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+        Text("When you leave the app during a video", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(6.dp))
+        app.vidflow.core.LeaveMode.entries.forEach { m ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { app.vidflow.core.Prefs.setLeaveMode(m) }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                androidx.compose.material3.RadioButton(selected = mode == m, onClick = { app.vidflow.core.Prefs.setLeaveMode(m) })
+                Text(m.label)
+            }
+        }
+    }
+}
+
+@Composable
 fun BackHandlerCompat(onBack: () -> Unit) = androidx.activity.compose.BackHandler(onBack = onBack)
 
 @Composable
@@ -470,6 +514,7 @@ fun LibraryScreen(nav: Nav, openLiked: () -> Unit = {}, openPlaylists: () -> Uni
             }
         }
         items(history, key = { "h-" + it.video.url }) { w -> VideoRow(w.video, nav) }
+        item { PlaybackSettings() }
         item {
             Text(
                 "Vidflow has no account and no ads. Your subscriptions and history never leave this phone.",

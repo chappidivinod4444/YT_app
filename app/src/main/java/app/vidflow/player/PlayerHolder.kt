@@ -60,7 +60,12 @@ object PlayerHolder {
 
     fun init(context: Context) {
         app = context.applicationContext
+        // Smaller start buffer: videos begin playing sooner.
+        val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
+            .setBufferDurationsMs(12_000, 45_000, 800, 1_500)
+            .build()
         player = ExoPlayer.Builder(app)
+            .setLoadControl(loadControl)
             .setAudioAttributes(
                 AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(),
                 true,
@@ -128,6 +133,17 @@ object PlayerHolder {
         play(v, i, height, player.currentPosition, loop = player.repeatMode == Player.REPEAT_MODE_ONE)
     }
 
+    /** Background: keep the sound, stop downloading video to save data and battery. */
+    fun setVideoEnabled(on: Boolean) {
+        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, !on)
+            .build()
+    }
+
+    fun setSpeed(speed: Float) {
+        player.setPlaybackSpeed(speed)
+    }
+
     fun stop() {
         current.value?.let { Library.savePosition(it.url, player.currentPosition) }
         player.stop()
@@ -138,8 +154,9 @@ object PlayerHolder {
 
     // ---------------------------------------------------------------- sources
 
+    /** Quality as shown to people ("720p"), which also works for vertical videos. */
     private fun VideoStream.heightOrParsed(): Int =
-        height.takeIf { it > 0 } ?: resolution.takeWhile { it.isDigit() }.toIntOrNull() ?: 0
+        resolution.takeWhile { it.isDigit() }.toIntOrNull()?.takeIf { it > 0 } ?: height.coerceAtLeast(0)
 
     private fun videoChoices(i: StreamInfo): List<VideoStream> =
         i.videoOnlyStreams.filter { it.isUrl && it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP && it.itagItem != null }

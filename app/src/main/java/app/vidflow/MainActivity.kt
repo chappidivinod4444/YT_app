@@ -81,6 +81,8 @@ class VidflowApp : Application() {
         Yt.init()
         Library.init(this)
         app.vidflow.core.GoogleAccount.init(this)
+        app.vidflow.core.Prefs.init(this)
+        app.vidflow.core.SeenShorts.init(this)
         PlayerHolder.init(this)
     }
 }
@@ -90,6 +92,7 @@ sealed interface Screen {
     data object Library : Screen
     data object Search : Screen
     data object Shorts : Screen
+    data class ShortsFrom(val list: List<Video>, val index: Int) : Screen
     data object Liked : Screen
     data object MyPlaylists : Screen
     data class AccountPlaylist(val url: String, val title: String) : Screen
@@ -116,7 +119,37 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         PlayerHolder.connectSession(this)
+        PlayerHolder.setVideoEnabled(true)
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED &&
+            !getSharedPreferences("settings", MODE_PRIVATE).getBoolean("askedNotif", false)
+        ) {
+            // Needed for the play/pause controls while playing in the background.
+            getSharedPreferences("settings", MODE_PRIVATE).edit().putBoolean("askedNotif", true).apply()
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1)
+        }
     }
+
+    override fun onStop() {
+        super.onStop()
+        if (isInPictureInPictureMode || isChangingConfigurations) return
+        val p = PlayerHolder.player
+        val short = PlayerHolder.current.value?.short == true
+        when {
+            !p.isPlaying -> Unit
+            short || app.vidflow.core.Prefs.leaveMode.value == app.vidflow.core.LeaveMode.PAUSE -> p.pause()
+            else -> PlayerHolder.setVideoEnabled(false) // sound only in the background
+        }
+    }
+
+    /** Keep the sound going and leave the app. */
+    fun goBackground() {
+        PlayerHolder.player.play()
+        backgroundRequested = true
+        moveTaskToBack(true)
+    }
+
+    var backgroundRequested = false
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -136,7 +169,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        if (Ui.watching.value && PlayerHolder.player.isPlaying) enterPip()
+        val wantsPip = app.vidflow.core.Prefs.leaveMode.value == app.vidflow.core.LeaveMode.PIP
+        if (!backgroundRequested && wantsPip && Ui.watching.value && PlayerHolder.player.isPlaying &&
+            PlayerHolder.current.value?.short != true
+        ) enterPip()
+        backgroundRequested = false
     }
 
     fun enterPip() {
@@ -189,6 +226,8 @@ private fun Root(activity: MainActivity) {
             playlist = { push(Screen.PlaylistPage(it)) },
             search = { push(Screen.Search) },
             back = { if (stack.size > 1) stack.removeAt(stack.lastIndex) },
+            background = { v -> backgroundPlay(activity, v) },
+            shorts = { list, i -> push(Screen.ShortsFrom(list, i)) },
         )
     }
 
@@ -239,6 +278,7 @@ private fun Root(activity: MainActivity) {
                         say = say,
                     )
                     Screen.Shorts -> ShortsScreen(nav)
+                    is Screen.ShortsFrom -> ShortsScreen(nav, key = "from-" + top.list.getOrNull(top.index)?.url, startIndex = top.index, initial = top.list)
                     Screen.Liked -> AccountListScreen("Liked videos", nav, load = { GoogleAccount.liked() }, openPlaylist = {})
                     Screen.MyPlaylists -> AccountListScreen(
                         "Your playlists", nav, load = { GoogleAccount.playlists() },
@@ -253,7 +293,7 @@ private fun Root(activity: MainActivity) {
                 androidx.compose.material3.SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp))
             }
             val playing = current
-            if (playing != null && top !is Screen.Watch && top != Screen.Shorts && !playing.short) {
+            if (playing != null && top !is Screen.Watch && top != Screen.Shorts && top !is Screen.ShortsFrom && !playing.short) {
                 MiniPlayer(playing, onOpen = { push(Screen.Watch(playing)) }, onClose = { PlayerHolder.stop() })
             }
             if (top == Screen.Home || top == Screen.Library || top == Screen.Shorts) {
@@ -278,6 +318,27 @@ private fun Root(activity: MainActivity) {
                     )
                 }
             }
+        }
+    }
+}
+
+/** Starts a video (if needed) and sends the app to the background with the sound playing. */
+private fun backgroundPlay(activity: MainActivity, v: Video) {
+    val now = PlayerHolder.current.value
+    if (now?.url == v.url) {
+        activity.goBackground()
+        return
+    }
+    android.widget.Toast.makeText(activity, "Starting in the background\u2026", android.widget.Toast.LENGTH_SHORT).show()
+    kotlinx.coroutines.MainScope().launch {
+        try {
+            val info = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { Yt.stream(v.url) }
+            val full = v.copy(title = info.name ?: v.title, channel = info.uploaderName ?: v.channel)
+            Library.watched(full, Library.position(v.url))
+            PlayerHolder.play(full, info)
+            activity.goBackground()
+        } catch (t: Throwable) {
+            android.widget.Toast.makeText(activity, app.vidflow.core.friendlyError(t), android.widget.Toast.LENGTH_LONG).show()
         }
     }
 }

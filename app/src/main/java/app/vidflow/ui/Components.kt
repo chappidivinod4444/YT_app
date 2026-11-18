@@ -1,5 +1,6 @@
 package app.vidflow.ui
 
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -114,6 +115,10 @@ class Nav(
     val playlist: (String) -> Unit,
     val search: () -> Unit,
     val back: () -> Unit,
+    /** Play only the sound and leave the screen. */
+    val background: (Video) -> Unit = {},
+    /** Open the Shorts player at one of these. */
+    val shorts: (List<Video>, Int) -> Unit = { l, i -> video(l[i]) },
 )
 
 fun Nav.open(item: Item) = when (item) {
@@ -169,17 +174,17 @@ fun Avatar(url: String?, size: Int = 36) {
     )
 }
 
-/** Big card: full-width thumbnail with title below. */
+/** Big card: edge-to-edge thumbnail with title below. */
 @Composable
 fun VideoCard(v: Video, nav: Nav) {
     Column(
         Modifier
             .fillMaxWidth()
             .clickable { nav.video(v) }
-            .padding(bottom = 14.dp)
+            .padding(bottom = 18.dp)
     ) {
-        Thumb(v.thumbnail, v.durationSec, v.live, Modifier.fillMaxWidth().padding(horizontal = 12.dp))
-        Row(Modifier.padding(start = 12.dp, end = 12.dp, top = 10.dp)) {
+        Thumb(v.thumbnail, v.durationSec, v.live, Modifier.fillMaxWidth(), corner = 0)
+        Row(Modifier.padding(start = 12.dp, end = 0.dp, top = 10.dp)) {
             Box(Modifier.clickable(enabled = v.channelUrl != null) { v.channelUrl?.let(nav.channel) }) {
                 Avatar(v.channelAvatar)
             }
@@ -187,6 +192,131 @@ fun VideoCard(v: Video, nav: Nav) {
             Column(Modifier.weight(1f)) {
                 Text(v.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text(videoSubtitle(v), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+            VideoMenu(v, nav)
+        }
+    }
+}
+
+/** The ⋮ menu on a video. */
+@Composable
+fun VideoMenu(v: Video, nav: Nav) {
+    var open by remember { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    Box {
+        androidx.compose.material3.IconButton(onClick = { open = true }, modifier = Modifier.size(36.dp)) {
+            androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.MoreVert, contentDescription = "More", modifier = Modifier.size(18.dp))
+        }
+        androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            androidx.compose.material3.DropdownMenuItem(text = { Text("Play in background") }, onClick = { open = false; nav.background(v) })
+            androidx.compose.material3.DropdownMenuItem(text = { Text("Share") }, onClick = {
+                open = false
+                context.startActivity(
+                    android.content.Intent.createChooser(
+                        android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain").putExtra(android.content.Intent.EXTRA_TEXT, v.url),
+                        "Share",
+                    ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            })
+            if (v.channelUrl != null) {
+                androidx.compose.material3.DropdownMenuItem(text = { Text("Go to channel") }, onClick = { open = false; v.channelUrl.let(nav.channel) })
+            }
+        }
+    }
+}
+
+/** A row of vertical short cards. */
+@Composable
+fun ShortsShelf(shorts: List<Video>, nav: Nav) {
+    if (shorts.isEmpty()) return
+    Column(Modifier.padding(bottom = 18.dp)) {
+        Text(
+            "\u26A1 Shorts", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(start = 12.dp, bottom = 10.dp),
+        )
+        androidx.compose.foundation.lazy.LazyRow(
+            contentPadding = PaddingValues(horizontal = 12.dp),
+            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+        ) {
+            items(shorts.size, key = { shorts[it].url }) { i ->
+                val s = shorts[i]
+                Box(
+                    Modifier
+                        .width(150.dp)
+                        .aspectRatio(9f / 16f)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                        .clickable { nav.shorts(shorts, i) }
+                ) {
+                    AsyncImage(model = s.thumbnail, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                    Column(
+                        Modifier
+                            .align(Alignment.BottomStart)
+                            .fillMaxWidth()
+                            .background(androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Color.Transparent, Color(0xB3000000))))
+                            .padding(8.dp)
+                    ) {
+                        Text(s.title, color = Color.White, style = MaterialTheme.typography.labelMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        if (s.views >= 0) Text(formatCount(s.views) + " views", color = Color(0xCCFFFFFF), style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Gentle moving highlight used for loading placeholders. */
+fun Modifier.shimmer(dark: Boolean = false): Modifier = androidx.compose.ui.composed {
+    val t = androidx.compose.animation.core.rememberInfiniteTransition(label = "shimmer")
+    val x by t.animateFloat(
+        initialValue = -400f, targetValue = 1400f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(1100)),
+        label = "x",
+    )
+    val base = if (dark) Color(0xFF1A1A1F) else MaterialTheme.colorScheme.surfaceContainerHigh
+    val hi = if (dark) Color(0xFF2A2A31) else MaterialTheme.colorScheme.surfaceContainerHighest
+    background(
+        androidx.compose.ui.graphics.Brush.linearGradient(
+            listOf(base, hi, base),
+            start = androidx.compose.ui.geometry.Offset(x, 0f),
+            end = androidx.compose.ui.geometry.Offset(x + 400f, 400f),
+        )
+    )
+}
+
+@Composable
+fun SkeletonCards(count: Int = 3) {
+    Column {
+        repeat(count) {
+            Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).shimmer())
+            Row(Modifier.padding(12.dp)) {
+                Box(Modifier.size(36.dp).clip(androidx.compose.foundation.shape.CircleShape).shimmer())
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Box(Modifier.fillMaxWidth(0.9f).height(14.dp).clip(RoundedCornerShape(4.dp)).shimmer())
+                    Spacer(Modifier.height(8.dp))
+                    Box(Modifier.fillMaxWidth(0.6f).height(12.dp).clip(RoundedCornerShape(4.dp)).shimmer())
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+        }
+    }
+}
+
+@Composable
+fun SkeletonRows(count: Int = 6) {
+    Column {
+        repeat(count) {
+            Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+                Box(Modifier.width(160.dp).aspectRatio(16f / 9f).clip(RoundedCornerShape(10.dp)).shimmer())
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Box(Modifier.fillMaxWidth().height(13.dp).clip(RoundedCornerShape(4.dp)).shimmer())
+                    Spacer(Modifier.height(6.dp))
+                    Box(Modifier.fillMaxWidth(0.7f).height(13.dp).clip(RoundedCornerShape(4.dp)).shimmer())
+                    Spacer(Modifier.height(8.dp))
+                    Box(Modifier.fillMaxWidth(0.5f).height(11.dp).clip(RoundedCornerShape(4.dp)).shimmer())
+                }
             }
         }
     }
@@ -208,6 +338,7 @@ fun VideoRow(v: Video, nav: Nav, withChannel: Boolean = true) {
             Spacer(Modifier.height(2.dp))
             Text(videoSubtitle(v, withChannel), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
+        VideoMenu(v, nav)
     }
 }
 
@@ -333,6 +464,8 @@ fun PagedColumn(
     load: () -> Paged,
     bigVideos: Boolean = true,
     header: LazyListScope.() -> Unit = {},
+    /** Shown after the 3rd item (e.g. a Shorts shelf). */
+    insert: (@Composable () -> Unit)? = null,
 ) {
     val list = remember(key) { PagedList() }
     val scope = rememberCoroutineScope()
@@ -371,7 +504,7 @@ fun PagedColumn(
         val err = list.error
         when {
             err != null && list.items.isEmpty() -> item { ErrorBox(err) { reload() } }
-            list.items.isEmpty() && (list.loading || first) -> item { Loading() }
+            list.items.isEmpty() && (list.loading || first) -> item { if (bigVideos) SkeletonCards() else SkeletonRows() }
             list.items.isEmpty() -> item {
                 Text(
                     "Nothing here yet.",
@@ -381,7 +514,12 @@ fun PagedColumn(
                 )
             }
         }
-        items(list.items, key = { it.url }) { ItemView(it, nav, bigVideos) }
+        val split = if (insert != null) minOf(3, list.items.size) else list.items.size
+        items(list.items.subList(0, split), key = { it.url }, contentType = { it::class }) { ItemView(it, nav, bigVideos) }
+        if (insert != null && list.items.isNotEmpty()) item(key = "insert", contentType = "insert") { insert() }
+        if (split < list.items.size) {
+            items(list.items.subList(split, list.items.size), key = { it.url }, contentType = { it::class }) { ItemView(it, nav, bigVideos) }
+        }
         if (list.loading && list.items.isNotEmpty()) item { Loading() }
     }
 }

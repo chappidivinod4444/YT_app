@@ -218,42 +218,89 @@ object Yt {
         page.shortsTab?.let { tabPage(it).let { p -> Paged(p.items.map { i -> if (i is Video) i.copy(short = true) else i }, p.next) } }
             ?: Paged(emptyList(), null)
 
-    /** Shorts from your channels first, then popular ones found by search. */
+    private val shortTopics = listOf(
+        "#shorts", "#shorts funny", "#shorts comedy", "#shorts music", "#shorts cricket", "#shorts football",
+        "#shorts tech", "#shorts cooking", "#shorts food", "#shorts travel", "#shorts gaming", "#shorts motivation",
+        "#shorts dance", "#shorts animals", "#shorts science", "#shorts movie", "#shorts cars", "#shorts bike",
+        "#shorts art", "#shorts life hacks", "#shorts nature", "#shorts fitness", "#shorts satisfying", "#shorts news",
+        "#shorts viral", "#shorts trending", "#shorts song", "#shorts magic", "#shorts diy", "#shorts history",
+    )
+
+    /** Shorts suggested by what you watched (filled in while you watch). */
+    private val suggested = java.util.concurrent.ConcurrentLinkedQueue<Video>()
+
+    fun isShortLike(v: Video) = v.short || v.durationSec in 1..180
+
+    fun addSuggestions(info: StreamInfo) {
+        val more = info.relatedItems.items().filterIsInstance<Video>().filter { isShortLike(it) && !it.live }
+        more.shuffled().take(6).forEach { suggested.add(it.copy(short = true)) }
+        while (suggested.size > 60) suggested.poll()
+    }
+
+    /**
+     * An endless, varied feed: your channels' shorts, suggestions from what you watched,
+     * and a fresh random mix of topics each time. Shorts you've seen are skipped.
+     */
     fun shortsFeed(subscriptionUrls: List<String>): Paged {
-        val fromSubs = java.util.concurrent.Executors.newFixedThreadPool(4).let { pool ->
-            val jobs = subscriptionUrls.shuffled().take(10).map { url ->
-                pool.submit<List<Item>> {
-                    try {
-                        val info = ChannelInfo.getInfo(service, url)
-                        val tab = info.tabs.firstOrNull { ChannelTabs.SHORTS in it.contentFilters } ?: return@submit emptyList()
-                        ChannelTabInfo.getInfo(service, tab).relatedItems.items().take(6)
-                    } catch (_: Throwable) {
-                        emptyList()
+        val shown = java.util.Collections.synchronizedSet(HashSet<String>())
+
+        fun batch(includeSubs: Boolean): List<Video> {
+            val pool = java.util.concurrent.Executors.newFixedThreadPool(5)
+            try {
+                val jobs = ArrayList<java.util.concurrent.Future<List<Video>>>()
+                if (includeSubs) {
+                    subscriptionUrls.shuffled().take(6).forEach { url ->
+                        jobs.add(pool.submit<List<Video>> {
+                            try {
+                                val info = ChannelInfo.getInfo(service, url)
+                                val tab = info.tabs.firstOrNull { ChannelTabs.SHORTS in it.contentFilters } ?: return@submit emptyList()
+                                ChannelTabInfo.getInfo(service, tab).relatedItems.items().filterIsInstance<Video>().shuffled().take(5)
+                            } catch (_: Throwable) {
+                                emptyList()
+                            }
+                        })
                     }
                 }
+                shortTopics.shuffled().take(3).forEach { topic ->
+                    jobs.add(pool.submit<List<Video>> {
+                        try {
+                            search(topic, "videos").items.filterIsInstance<Video>().filter { isShortLike(it) && !it.live }
+                        } catch (_: Throwable) {
+                            emptyList()
+                        }
+                    })
+                }
+                val lists = jobs.map { runCatching { it.get() }.getOrDefault(emptyList()) }
+                val fromSuggestions = generateSequence { suggested.poll() }.take(12).toList()
+                // Interleave the sources so one topic doesn't fill the screen.
+                val mixed = ArrayList<Video>()
+                val all = (lists + listOf(fromSuggestions)).map { it.shuffled().toMutableList() }.filter { it.isNotEmpty() }
+                var i = 0
+                while (all.any { it.isNotEmpty() }) {
+                    val l = all[i % all.size]
+                    if (l.isNotEmpty()) mixed.add(l.removeAt(0))
+                    i++
+                }
+                return mixed.map { it.copy(short = true) }
+                    .filter { !app.vidflow.core.SeenShorts.has(it.url) && shown.add(it.url) }
+            } finally {
+                pool.shutdown()
             }
-            val all = jobs.flatMap { runCatching { it.get() }.getOrDefault(emptyList()) }
-            pool.shutdown()
-            all
         }
-        val search = try {
-            search("#shorts", "videos")
-        } catch (_: Throwable) {
-            Paged(emptyList(), null)
+
+        fun next(round: Int): suspend () -> Paged = {
+            var items = batch(includeSubs = round % 3 == 0)
+            if (items.isEmpty()) items = batch(includeSubs = false)
+            Paged(items, if (round < 50) next(round + 1) else null)
         }
-        val found = search.items.filterIsInstance<Video>().filter { it.short || (it.durationSec in 1..60) }
-        val mixed = (fromSubs.filterIsInstance<Video>().shuffled() + found).distinctBy { it.url }
-            .map { it.copy(short = true) }
-        fun more(next: (suspend () -> Paged)?): (suspend () -> Paged)? = next?.let { n ->
-            {
-                val p = n()
-                Paged(
-                    p.items.filterIsInstance<Video>().filter { it.short || it.durationSec in 1..60 }.map { it.copy(short = true) },
-                    more(p.next),
-                )
-            }
+
+        var first = batch(includeSubs = true)
+        if (first.isEmpty()) {
+            // Everything was seen already: start over with the history cleared.
+            app.vidflow.core.SeenShorts.clear()
+            first = batch(includeSubs = true)
         }
-        return Paged(mixed, more(search.next))
+        return Paged(first, next(1))
     }
 
     private fun tabPage(tab: ListLinkHandler): Paged {

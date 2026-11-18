@@ -26,6 +26,14 @@ android {
     }
     buildTypes {
         getByName("debug") { signingConfig = signingConfigs.getByName("debug") }
+        // The published APK: optimized and much smoother than a debug build.
+        // Signed with the same key so it installs over earlier versions.
+        getByName("release") {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.getByName("debug")
+        }
     }
     compileOptions {
         // The extractor uses newer Java APIs; desugaring makes them work on older Android.

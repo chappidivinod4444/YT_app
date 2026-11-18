@@ -7,6 +7,7 @@ import android.widget.FrameLayout
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -153,7 +154,7 @@ fun VideoScreen(video: Video, nav: Nav, onFullscreen: () -> Unit) {
         }
         LazyColumn(contentPadding = PaddingValues(bottom = 24.dp), modifier = Modifier.fillMaxSize()) {
             item { Details(video, i, nav) }
-            val related: List<Item> = i?.let { Yt.related(it) }.orEmpty()
+            val related: List<Item> = remember(i) { i?.let { Yt.related(it) }.orEmpty() }
             if (related.isNotEmpty()) {
                 item {
                     Text(
@@ -162,9 +163,23 @@ fun VideoScreen(video: Video, nav: Nav, onFullscreen: () -> Unit) {
                     )
                 }
             }
-            items(related, key = { "r-" + it.url }) { ItemView(it, nav, bigVideos = false) }
+            if (i == null && loading) item { SkeletonRows(4) }
+            items(related, key = { "r-" + it.url }, contentType = { it::class }) { ItemView(it, nav, bigVideos = false) }
         }
     }
+}
+
+@Composable
+private fun Pill(text: String, onClick: () -> Unit) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(20.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 9.dp),
+    )
 }
 
 @Composable
@@ -210,14 +225,40 @@ private fun Details(video: Video, i: StreamInfo?, nav: Nav) {
             }
         }
 
-        Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        val context = androidx.compose.ui.platform.LocalContext.current
+        var speedMenu by remember { mutableStateOf(false) }
+        var speed by remember { mutableStateOf(PlayerHolder.player.playbackParameters.speed) }
+        Row(
+            Modifier
+                .padding(top = 12.dp)
+                .horizontalScroll(androidx.compose.foundation.rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            val likes = i?.likeCount ?: -1
+            if (likes >= 0) Pill("\u2665  ${formatCount(likes)}") {}
+            Pill("\uD83C\uDFA7  Background") { nav.background(video) }
+            Pill("\u2197  Share") {
+                context.startActivity(
+                    android.content.Intent.createChooser(
+                        android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain").putExtra(android.content.Intent.EXTRA_TEXT, video.url),
+                        "Share",
+                    ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }
+            Box {
+                Pill(if (speed == 1f) "\u23E9  Speed" else "\u23E9  ${speed}x") { speedMenu = true }
+                DropdownMenu(expanded = speedMenu, onDismissRequest = { speedMenu = false }) {
+                    listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f).forEach { s ->
+                        DropdownMenuItem(
+                            text = { Text((if (s == 1f) "Normal" else "${s}x") + if (s == speed) "  \u2713" else "") },
+                            onClick = { speedMenu = false; speed = s; PlayerHolder.setSpeed(s) },
+                        )
+                    }
+                }
+            }
             if (qualities.isNotEmpty()) {
                 Box {
-                    AssistChip(
-                        onClick = { qualityMenu = true },
-                        label = { Text(if (quality > 0) "${quality}p" else "Quality") },
-                        leadingIcon = { Icon(Icons.Filled.Settings, contentDescription = null) },
-                    )
+                    Pill("\u2699  " + if (quality > 0) "${quality}p" else "Quality") { qualityMenu = true }
                     DropdownMenu(expanded = qualityMenu, onDismissRequest = { qualityMenu = false }) {
                         qualities.forEach { h ->
                             DropdownMenuItem(
