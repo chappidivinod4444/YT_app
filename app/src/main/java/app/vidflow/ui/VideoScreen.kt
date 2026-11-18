@@ -130,6 +130,19 @@ fun VideoScreen(video: Video, nav: Nav, onFullscreen: () -> Unit) {
 
     val i = info?.takeIf { current?.url == video.url }
 
+    val related: List<Item> = remember(i) { i?.let { Yt.related(it) }.orEmpty() }
+    val nextVideo = related.filterIsInstance<Video>().firstOrNull()
+    val ended by PlayerHolder.endedCount.collectAsState()
+    val autoplay by PlayerHolder.autoplay.collectAsState()
+    var lastEnded by remember(video.url) { mutableStateOf(ended) }
+    LaunchedEffect(ended) {
+        if (ended != lastEnded) {
+            lastEnded = ended
+            if (autoplay && nextVideo != null && current?.url == video.url) nav.video(nextVideo)
+        }
+    }
+    val previous = PlayerHolder.session.dropLast(1).lastOrNull()?.takeIf { it.url != video.url }
+
     Column(Modifier.fillMaxSize()) {
         Box(
             Modifier
@@ -138,10 +151,27 @@ fun VideoScreen(video: Video, nav: Nav, onFullscreen: () -> Unit) {
                 .background(Color.Black),
             contentAlignment = Alignment.Center,
         ) {
-            if (i != null) PlayerSurface(Modifier.fillMaxSize(), onFullscreen = onFullscreen)
+            if (i != null) {
+                VideoPlayer(
+                    modifier = Modifier.fillMaxSize(),
+                    fullscreen = false,
+                    onFullscreen = onFullscreen,
+                    onMinimize = nav.back,
+                    onNext = nextVideo?.let { n -> { nav.video(n) } },
+                    onPrevious = previous?.let { p -> { PlayerHolder.session.removeAt(PlayerHolder.session.lastIndex); nav.video(p) } },
+                )
+            } else if (video.thumbnail != null) {
+                coil3.compose.AsyncImage(
+                    model = video.thumbnail, contentDescription = null,
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop, modifier = Modifier.fillMaxSize(),
+                )
+            }
             when {
                 loading -> CircularProgressIndicator(color = Color.White)
-                loadError != null || playError != null -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                loadError != null || playError != null -> Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.background(Color(0xAA000000)).padding(16.dp),
+                ) {
                     Text(
                         loadError ?: playError ?: "",
                         color = Color.White,
@@ -152,20 +182,44 @@ fun VideoScreen(video: Video, nav: Nav, onFullscreen: () -> Unit) {
                 }
             }
         }
-        val related: List<Item> = remember(i) { i?.let { Yt.related(it) }.orEmpty() }
+
+        // Chips under the video: All / From <channel> / Related.
+        var filter by remember(video.url) { mutableStateOf("all") }
+        var fromChannel by remember(video.url) { mutableStateOf<List<Item>?>(null) }
+        val channelUrl = i?.uploaderUrl ?: video.channelUrl
+        LaunchedEffect(filter, channelUrl) {
+            if (filter == "channel" && fromChannel == null && channelUrl != null) {
+                fromChannel = withContext(Dispatchers.IO) {
+                    runCatching { Yt.channel(channelUrl).videos.items }.getOrDefault(emptyList())
+                }.filter { it.url != video.url }
+            }
+        }
+        val shown = when (filter) {
+            "channel" -> fromChannel
+            "related" -> related.filter { it is Video && it.channelUrl != channelUrl }
+            else -> related
+        }
+        var showComments by remember(video.url) { mutableStateOf(false) }
+
         LazyColumn(contentPadding = PaddingValues(bottom = 24.dp), modifier = Modifier.fillMaxSize()) {
             item { Details(video, i, nav) }
-            if (related.isNotEmpty()) {
-                item {
-                    Text(
-                        "Up next", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 4.dp),
-                    )
+            item { CommentsPreview(video.url) { showComments = true } }
+            item {
+                androidx.compose.foundation.lazy.LazyRow(
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    item { TopicChip("All", filter == "all") { filter = "all" } }
+                    if (channelUrl != null) item {
+                        TopicChip("From ${i?.uploaderName ?: video.channel}", filter == "channel") { filter = "channel" }
+                    }
+                    item { TopicChip("Related", filter == "related") { filter = "related" } }
                 }
             }
-            if (i == null && loading) item { SkeletonRows(4) }
-            items(related, key = { "r-" + it.url }, contentType = { it::class }) { ItemView(it, nav, bigVideos = false) }
+            if ((i == null && loading) || (filter == "channel" && fromChannel == null)) item { SkeletonCards(2) }
+            items(shown.orEmpty(), key = { "r-$filter-" + it.url }, contentType = { it::class }) { ItemView(it, nav, bigVideos = true) }
         }
+        if (showComments) CommentsSheet(video.url) { showComments = false }
     }
 }
 

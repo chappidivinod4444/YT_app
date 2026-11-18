@@ -40,6 +40,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -133,6 +134,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        backgroundRequested = false
         PlayerHolder.connectSession(this)
         PlayerHolder.setVideoEnabled(true)
         if (android.os.Build.VERSION.SDK_INT >= 33 &&
@@ -161,6 +163,7 @@ class MainActivity : ComponentActivity() {
     fun goBackground() {
         PlayerHolder.player.play()
         backgroundRequested = true
+        updatePip(false)
         moveTaskToBack(true)
     }
 
@@ -185,10 +188,26 @@ class MainActivity : ComponentActivity() {
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
         val wantsPip = app.vidflow.core.Prefs.leaveMode.value == app.vidflow.core.LeaveMode.PIP
-        if (!backgroundRequested && wantsPip && Ui.watching.value && PlayerHolder.player.isPlaying &&
-            PlayerHolder.current.value?.short != true
+        if (!backgroundRequested && wantsPip && PlayerHolder.player.isPlaying &&
+            PlayerHolder.current.value?.short != true && Build.VERSION.SDK_INT < 31
         ) enterPip()
         backgroundRequested = false
+    }
+
+    /** On Android 12+, the system moves the video into a pop-up window by itself when you go Home. */
+    fun updatePip(auto: Boolean) {
+        if (Build.VERSION.SDK_INT >= 31) {
+            try {
+                setPictureInPictureParams(
+                    PictureInPictureParams.Builder()
+                        .setAspectRatio(Rational(16, 9))
+                        .setAutoEnterEnabled(auto && !backgroundRequested)
+                        .setSeamlessResizeEnabled(true)
+                        .build()
+                )
+            } catch (_: Throwable) {
+            }
+        }
     }
 
     fun enterPip() {
@@ -266,6 +285,22 @@ private fun Root(activity: MainActivity) {
         Ui.watching.value = top is Screen.Watch
         onDispose { }
     }
+    val leaveMode by app.vidflow.core.Prefs.leaveMode.collectAsState()
+    var playingNow by remember { mutableStateOf(PlayerHolder.player.isPlaying) }
+    DisposableEffect(Unit) {
+        val l = object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                playingNow = isPlaying
+            }
+        }
+        PlayerHolder.player.addListener(l)
+        onDispose { PlayerHolder.player.removeListener(l) }
+    }
+    LaunchedEffect(playingNow, current, leaveMode) {
+        activity.updatePip(
+            playingNow && current != null && current?.short != true && leaveMode == app.vidflow.core.LeaveMode.PIP
+        )
+    }
 
     if (inPip) {
         PlayerSurface(Modifier.fillMaxSize(), controls = false)
@@ -274,7 +309,14 @@ private fun Root(activity: MainActivity) {
     if (fullscreen && top is Screen.Watch) {
         BackHandler { activity.setFullscreen(false) }
         Box(Modifier.fillMaxSize().background(Color.Black)) {
-            PlayerSurface(Modifier.fillMaxSize(), onFullscreen = { activity.setFullscreen(false) })
+            app.vidflow.ui.VideoPlayer(
+                modifier = Modifier.fillMaxSize(),
+                fullscreen = true,
+                onFullscreen = { activity.setFullscreen(false) },
+                onMinimize = { activity.setFullscreen(false) },
+                onNext = null,
+                onPrevious = null,
+            )
         }
         return
     }
@@ -309,11 +351,16 @@ private fun Root(activity: MainActivity) {
                     is Screen.PlaylistPage -> PlaylistScreen(top.url, nav)
                 }
                 androidx.compose.material3.SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp))
+                val playing = current
+                if (playing != null && top !is Screen.Watch && top != Screen.Shorts && top !is Screen.ShortsFrom && !playing.short) {
+                    FloatingMiniPlayer(
+                        modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp),
+                        onOpen = { push(Screen.Watch(playing)) },
+                        onClose = { PlayerHolder.stop() },
+                    )
+                }
             }
-            val playing = current
-            if (playing != null && top !is Screen.Watch && top != Screen.Shorts && top !is Screen.ShortsFrom && !playing.short) {
-                MiniPlayer(playing, onOpen = { push(Screen.Watch(playing)) }, onClose = { PlayerHolder.stop() })
-            }
+
             val isTab = top == Screen.Home || top == Screen.Library || top == Screen.Shorts || top == Screen.Subscriptions
             if (isTab) {
                 NavigationBar(
@@ -371,6 +418,40 @@ private fun backgroundPlay(activity: MainActivity, v: Video) {
             activity.goBackground()
         } catch (t: Throwable) {
             android.widget.Toast.makeText(activity, app.vidflow.core.friendlyError(t), android.widget.Toast.LENGTH_LONG).show()
+        }
+    }
+}
+
+/** Small floating window with the video, like a pop-up player inside the app. */
+@Composable
+private fun FloatingMiniPlayer(modifier: Modifier, onOpen: () -> Unit, onClose: () -> Unit) {
+    var isPlaying by remember { mutableStateOf(PlayerHolder.player.isPlaying) }
+    DisposableEffect(Unit) {
+        val l = object : Player.Listener {
+            override fun onIsPlayingChanged(playing: Boolean) {
+                isPlaying = playing
+            }
+        }
+        PlayerHolder.player.addListener(l)
+        onDispose { PlayerHolder.player.removeListener(l) }
+    }
+    androidx.compose.material3.Surface(
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
+        shadowElevation = 10.dp,
+        color = Color.Black,
+        modifier = modifier
+            .width(220.dp)
+            .aspectRatio(16f / 9f),
+    ) {
+        Box(Modifier.fillMaxSize().clickable(onClick = onOpen)) {
+            PlayerSurface(Modifier.fillMaxSize(), controls = false)
+            Row(Modifier.fillMaxWidth().padding(4.dp)) {
+                IconButton(onClick = { val p = PlayerHolder.player; if (p.isPlaying) p.pause() else p.play() }) {
+                    Text(if (isPlaying) "\u23F8" else "\u25B6", color = Color.White, style = MaterialTheme.typography.titleLarge)
+                }
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = onClose) { Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White) }
+            }
         }
     }
 }
