@@ -19,3 +19,7 @@
 -dontwarn org.bouncycastle.**
 -dontwarn org.openjsse.**
 -dontwarn java.lang.invoke.StringConcatFactory
+-dontwarn org.jspecify.**
+-dontwarn com.google.re2j.**
+-dontwarn javax.lang.model.**
+-dontwarn kotlin.annotations.jvm.**
