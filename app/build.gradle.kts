@@ -91,6 +91,9 @@ dependencies {
     implementation("io.coil-kt.coil3:coil-compose:3.0.4")
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.0.4")
 
+    // New-upload checks in the background.
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
+
     // Optional Google sign-in (official, through Google Play services).
     implementation("com.google.android.gms:play-services-auth:21.3.0")
 

@@ -523,7 +523,6 @@ fun SearchScreen(nav: Nav) {
 fun ChannelScreen(url: String, nav: Nav) {
     var page by remember(url) { mutableStateOf<Yt.ChannelPage?>(null) }
     var error by remember(url) { mutableStateOf<String?>(null) }
-    val subs by Library.subscriptions.collectAsState()
     val scope = rememberCoroutineScope()
 
     fun load() {
@@ -536,68 +535,206 @@ fun ChannelScreen(url: String, nav: Nav) {
             }
         }
     }
-    LaunchedEffect(url) { load() }
+    LaunchedEffect(url) { if (page == null) load() }
 
-    Column(Modifier.fillMaxSize()) {
-        AppBar(page?.info?.name ?: "", nav, showBack = true)
-        val p = page
-        val err = error
-        when {
-            err != null -> ErrorBox(err) { load() }
-            p == null -> Loading()
-            else -> {
-                val info = p.info
-                val subscribed = remember(subs) { Library.isSubscribed(url) }
-                var showShorts by remember(url) { mutableStateOf(false) }
-                if (showShorts) {
-                    BackHandlerCompat { showShorts = false }
-                    ShortsScreen(nav, key = "channel-shorts-$url", load = { Yt.channelShorts(p) })
-                    return@Column
+    val p = page
+    val err = error
+    when {
+        err != null -> Column { AppBar("", nav, showBack = true); ErrorBox(err) { load() } }
+        p == null -> Column { AppBar("", nav, showBack = true); ChannelSkeleton() }
+        else -> ChannelContent(url, p, nav)
+    }
+}
+
+@Composable
+private fun ChannelSkeleton() {
+    Column(Modifier.padding(12.dp)) {
+        Box(Modifier.fillMaxWidth().aspectRatio(4f).clip(RoundedCornerShape(12.dp)).shimmer())
+        Row(Modifier.padding(vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(72.dp).clip(androidx.compose.foundation.shape.CircleShape).shimmer())
+            Spacer(Modifier.width(16.dp))
+            Column {
+                Box(Modifier.width(180.dp).height(20.dp).clip(RoundedCornerShape(6.dp)).shimmer())
+                Spacer(Modifier.height(8.dp))
+                Box(Modifier.width(120.dp).height(14.dp).clip(RoundedCornerShape(6.dp)).shimmer())
+            }
+        }
+        SkeletonCards(2)
+    }
+}
+
+@Composable
+private fun ChannelContent(url: String, p: Yt.ChannelPage, nav: Nav) {
+    val info = p.info
+    val subs by Library.subscriptions.collectAsState()
+    val subscribed = remember(subs) { Library.isSubscribed(url) }
+    val tabs = listOf("Home") + p.tabs.map { it.first }
+    var tab by rememberSaveable(url) { mutableStateOf("Home") }
+    var aboutOpen by remember { mutableStateOf(false) }
+    val handle = Regex("""/(@[^/?]+)""").find(url)?.groupValues?.get(1)
+        ?: Regex("""/(@[^/?]+)""").find(info.url ?: "")?.groupValues?.get(1)
+
+    val header: androidx.compose.foundation.lazy.LazyListScope.() -> Unit = {
+        item(key = "ch-top") {
+            Column {
+                AppBar("", nav, showBack = true)
+                info.banners.best(400)?.let {
+                    AsyncImage(
+                        model = it, contentDescription = null, contentScale = ContentScale.Crop,
+                        modifier = Modifier.padding(horizontal = 12.dp).fillMaxWidth().aspectRatio(3.7f).clip(RoundedCornerShape(12.dp)),
+                    )
                 }
-                PagedColumn(key = "channel-$url", nav = nav, load = { p.videos }, bigVideos = false) {
-                    item {
-                        Column {
-                            info.banners.best(400)?.let {
-                                AsyncImage(
-                                    model = it, contentDescription = null, contentScale = ContentScale.Crop,
-                                    modifier = Modifier.fillMaxWidth().aspectRatio(6f).padding(horizontal = 12.dp).clip(RoundedCornerShape(12.dp)),
-                                )
-                            }
-                            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Avatar(info.avatars.best(300), 72)
-                                Spacer(Modifier.width(16.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Text(info.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                                    if (info.subscriberCount >= 0) {
-                                        Text("${formatCount(info.subscriberCount)} subscribers", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-                                    }
-                                }
-                            }
-                            val about = info.description.orEmpty()
-                            if (about.isNotBlank()) {
-                                Text(
-                                    about, maxLines = 3, overflow = TextOverflow.Ellipsis,
-                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(horizontal = 16.dp),
-                                )
-                            }
-                            SubscribeButton(subscribed, Modifier.fillMaxWidth().padding(16.dp)) {
-                                Library.toggle(url, info.name, info.avatars.best(200))
-                            }
-                            if (p.shortsTab != null) {
-                                OutlinedButton(
-                                    onClick = { showShorts = true },
-                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                                ) { Text("Watch Shorts") }
-                            }
+                Row(Modifier.padding(start = 12.dp, end = 12.dp, top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Avatar(info.avatars.best(300), 80)
+                    Spacer(Modifier.width(16.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(info.name, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        if (handle != null) Text(handle, style = MaterialTheme.typography.bodyMedium)
+                        if (info.subscriberCount >= 0) {
                             Text(
-                                "Videos", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp),
+                                "${formatCount(info.subscriberCount)} subscribers",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     }
                 }
+                val about = info.description.orEmpty()
+                if (about.isNotBlank()) {
+                    Text(
+                        about,
+                        maxLines = if (aboutOpen) Int.MAX_VALUE else 2,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .padding(horizontal = 12.dp, vertical = 12.dp)
+                            .clickable { aboutOpen = !aboutOpen },
+                    )
+                }
+                val subscribeColor = if (subscribed) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.onSurface
+                Text(
+                    if (subscribed) "Subscribed \u2713" else "Subscribe",
+                    color = if (subscribed) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.background,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(22.dp))
+                        .background(subscribeColor)
+                        .clickable { Library.toggle(url, info.name, info.avatars.best(200)) }
+                        .padding(vertical = 11.dp),
+                )
             }
+        }
+        stickyHeader(key = "ch-tabs") {
+            Column(Modifier.background(MaterialTheme.colorScheme.background)) {
+                LazyRow(contentPadding = PaddingValues(horizontal = 8.dp)) {
+                    items(tabs) { t ->
+                        Column(
+                            Modifier.clickable { tab = t }.padding(horizontal = 14.dp, vertical = 12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Text(
+                                t,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (tab == t) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Box(
+                                Modifier.width(36.dp).height(2.dp)
+                                    .background(if (tab == t) MaterialTheme.colorScheme.onSurface else Color.Transparent)
+                            )
+                        }
+                    }
+                }
+                androidx.compose.material3.HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            }
+        }
+    }
+
+    when (tab) {
+        "Home" -> {
+            // Latest videos, with a Shorts row from this channel after the first few.
+            var shorts by remember(url) { mutableStateOf<List<Video>>(emptyList()) }
+            LaunchedEffect(url) {
+                val t = p.shortsTab ?: return@LaunchedEffect
+                shorts = withContext(Dispatchers.IO) {
+                    runCatching { Yt.channelTab(t, shorts = true).items.filterIsInstance<Video>().take(4) }.getOrDefault(emptyList())
+                }
+            }
+            PagedColumn(
+                key = "ch-home-$url", nav = nav, load = { p.videos }, bigVideos = true,
+                insert = { ShortsGrid(shorts, nav) }, header = header,
+            )
+        }
+        "Shorts" -> {
+            val handler = p.tabs.first { it.first == "Shorts" }.second
+            ShortsGridTab("ch-shorts-$url", nav, header) { Yt.channelTab(handler, shorts = true) }
+        }
+        else -> {
+            val handler = p.tabs.first { it.first == tab }.second
+            PagedColumn(
+                key = "ch-$tab-$url", nav = nav, load = { Yt.channelTab(handler) },
+                bigVideos = tab != "Playlists", header = header,
+            )
+        }
+    }
+}
+
+/** Three-column grid of a channel's shorts. */
+@Composable
+private fun ShortsGridTab(
+    key: String,
+    nav: Nav,
+    header: androidx.compose.foundation.lazy.LazyListScope.() -> Unit,
+    load: () -> Paged,
+) {
+    val list = remember(key) { ListCache.list(key) }
+    val state = remember(key) { ListCache.state(key) }
+    LaunchedEffect(key) {
+        if (list.items.isEmpty()) {
+            list.loading = true
+            try {
+                list.set(withContext(Dispatchers.IO) { load() })
+            } catch (t: Throwable) {
+                list.error = friendlyError(t)
+            } finally {
+                list.loading = false
+            }
+        }
+    }
+    val videos = list.items.filterIsInstance<Video>()
+    LazyColumn(state = state, contentPadding = PaddingValues(bottom = 90.dp), modifier = Modifier.fillMaxSize()) {
+        header()
+        if (list.loading && videos.isEmpty()) item { SkeletonRows(3) }
+        items(videos.chunked(3).size) { row ->
+            val trio = videos.chunked(3)[row]
+            Row(Modifier.padding(horizontal = 4.dp, vertical = 2.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                trio.forEachIndexed { col, v ->
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .aspectRatio(9f / 16f)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                            .clickable { nav.shorts(videos, row * 3 + col) }
+                    ) {
+                        AsyncImage(model = v.thumbnail, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                        if (v.views >= 0) Text(
+                            "\u25B7 " + formatCount(v.views),
+                            color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.align(Alignment.BottomStart).padding(6.dp),
+                        )
+                    }
+                }
+                repeat(3 - trio.size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
+        if (videos.isNotEmpty() && list.next != null) item {
+            LaunchedEffect(videos.size) { list.loadMore() }
+            Loading()
         }
     }
 }
@@ -676,7 +813,15 @@ fun PlaylistScreen(url: String, nav: Nav) {
 // ---------------------------------------------------------------- library
 
 @Composable
-fun LibraryScreen(nav: Nav, openLiked: () -> Unit = {}, openPlaylists: () -> Unit = {}, say: (String) -> Unit = {}) {
+fun LibraryScreen(
+    nav: Nav,
+    openLiked: () -> Unit = {},
+    openPlaylists: () -> Unit = {},
+    say: (String) -> Unit = {},
+    openLocalLiked: () -> Unit = {},
+    openLocalPlaylist: (String) -> Unit = {},
+    openSetup: () -> Unit = {},
+) {
     val subs by Library.subscriptions.collectAsState()
     val history by Library.history.collectAsState()
     var confirmClear by remember { mutableStateOf(false) }
@@ -684,6 +829,7 @@ fun LibraryScreen(nav: Nav, openLiked: () -> Unit = {}, openPlaylists: () -> Uni
     LazyColumn(contentPadding = PaddingValues(bottom = 90.dp), modifier = Modifier.fillMaxSize()) {
         item { AppBar("You", nav) }
         item { AccountSection(nav, openLiked, openPlaylists, say) }
+        item { YouSections(nav, openLocalPlaylist, openLocalLiked, openSetup) }
         item {
             Text("Subscriptions", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(16.dp, 8.dp))
         }

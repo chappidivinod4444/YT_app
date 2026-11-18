@@ -203,13 +203,19 @@ fun VideoCard(v: Video, nav: Nav) {
 @Composable
 fun VideoMenu(v: Video, nav: Nav) {
     var open by remember { mutableStateOf(false) }
+    var save by remember { mutableStateOf(false) }
+    var download by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
+    if (save) SaveToPlaylistDialog(v) { save = false }
+    if (download) DownloadDialog(v, emptyList()) { download = false }
     Box {
         androidx.compose.material3.IconButton(onClick = { open = true }, modifier = Modifier.size(36.dp)) {
             Text("\u22EE", fontSize = 18.sp, fontWeight = FontWeight.Bold)
         }
         androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             androidx.compose.material3.DropdownMenuItem(text = { Text("Play in background") }, onClick = { open = false; nav.background(v) })
+            androidx.compose.material3.DropdownMenuItem(text = { Text("Save to playlist") }, onClick = { open = false; save = true })
+            androidx.compose.material3.DropdownMenuItem(text = { Text("Download") }, onClick = { open = false; download = true })
             androidx.compose.material3.DropdownMenuItem(text = { Text("Share") }, onClick = {
                 open = false
                 context.startActivity(

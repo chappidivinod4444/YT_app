@@ -299,6 +299,19 @@ object Yt {
 
     class ChannelPage(val info: ChannelInfo, val videos: Paged) {
         val shortsTab: ListLinkHandler? = info.tabs.firstOrNull { ChannelTabs.SHORTS in it.contentFilters }
+
+        /** Tabs we can show: (label, handler). */
+        val tabs: List<Pair<String, ListLinkHandler>> = listOfNotNull(
+            info.tabs.firstOrNull { ChannelTabs.VIDEOS in it.contentFilters }?.let { "Videos" to it },
+            shortsTab?.let { "Shorts" to it },
+            info.tabs.firstOrNull { ChannelTabs.LIVESTREAMS in it.contentFilters }?.let { "Live" to it },
+            info.tabs.firstOrNull { ChannelTabs.PLAYLISTS in it.contentFilters }?.let { "Playlists" to it },
+        )
+    }
+
+    fun channelTab(tab: ListLinkHandler, shorts: Boolean = false): Paged {
+        val p = tabPage(tab)
+        return if (!shorts) p else Paged(p.items.map { if (it is Video) it.copy(short = true) else it }, p.next)
     }
 
     fun channel(url: String): ChannelPage {

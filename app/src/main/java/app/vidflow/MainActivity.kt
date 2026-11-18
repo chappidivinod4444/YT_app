@@ -87,6 +87,10 @@ class VidflowApp : Application() {
         app.vidflow.core.Prefs.init(this)
         app.vidflow.core.SeenShorts.init(this)
         app.vidflow.core.HomeCache.init(this)
+        app.vidflow.core.Saved.init(this)
+        app.vidflow.core.UploadsWorker.schedule(
+            this, getSharedPreferences("settings", MODE_PRIVATE).getBoolean("uploadAlerts", true)
+        )
         app.vidflow.core.Topics.init(this)
         app.vidflow.core.Notifications.init(this)
         // Smooth fade-in for thumbnails.
@@ -107,6 +111,9 @@ sealed interface Screen {
     data object Subscriptions : Screen
     data object Explore : Screen
     data object NotificationsList : Screen
+    data object LocalLiked : Screen
+    data class LocalList(val id: String) : Screen
+    data object GoogleSetup : Screen
     data object Shorts : Screen
     data class ShortsFrom(val list: List<Video>, val index: Int) : Screen
     data object Liked : Screen
@@ -336,7 +343,25 @@ private fun Root(activity: MainActivity) {
                         openLiked = { push(Screen.Liked) },
                         openPlaylists = { push(Screen.MyPlaylists) },
                         say = say,
+                        openLocalLiked = { push(Screen.LocalLiked) },
+                        openLocalPlaylist = { push(Screen.LocalList(it)) },
+                        openSetup = { push(Screen.GoogleSetup) },
                     )
+                    Screen.LocalLiked -> {
+                        val liked by app.vidflow.core.Saved.liked.collectAsState()
+                        app.vidflow.ui.LocalListScreen("Liked videos", liked, nav, onRemove = { app.vidflow.core.Saved.toggleLike(it) }, onDeleteList = null)
+                    }
+                    is Screen.LocalList -> {
+                        val lists by app.vidflow.core.Saved.playlists.collectAsState()
+                        val pl = lists.firstOrNull { it.id == top.id }
+                        if (pl == null) LaunchedEffect(Unit) { nav.back() }
+                        else app.vidflow.ui.LocalListScreen(
+                            pl.name, pl.videos, nav,
+                            onRemove = { v -> app.vidflow.core.Saved.removeFrom(pl.id, v.url) },
+                            onDeleteList = { app.vidflow.core.Saved.deletePlaylist(pl.id); nav.back() },
+                        )
+                    }
+                    Screen.GoogleSetup -> app.vidflow.ui.GoogleSetupScreen(nav)
                     Screen.Shorts -> ShortsScreen(nav)
                     is Screen.ShortsFrom -> ShortsScreen(nav, key = "from-" + top.list.getOrNull(top.index)?.url, startIndex = top.index, initial = top.list)
                     Screen.Liked -> AccountListScreen("Liked videos", nav, load = { GoogleAccount.liked() }, openPlaylist = {})

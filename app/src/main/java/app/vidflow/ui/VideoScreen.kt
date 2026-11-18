@@ -289,7 +289,17 @@ private fun Details(video: Video, i: StreamInfo?, nav: Nav) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             val likes = i?.likeCount ?: -1
-            if (likes >= 0) Pill("\u2665  ${formatCount(likes)}") {}
+            val likedList by app.vidflow.core.Saved.liked.collectAsState()
+            val liked = likedList.any { it.url == video.url }
+            Pill((if (liked) "\uD83D\uDC4D " else "\uD83D\uDC4D\uFE0E ") + if (likes >= 0) formatCount(likes + if (liked) 1 else 0) else "Like") {
+                app.vidflow.core.Saved.toggleLike(PlayerHolder.current.value?.takeIf { it.url == video.url } ?: video)
+            }
+            var saveOpen by remember { mutableStateOf(false) }
+            var downloadOpen by remember { mutableStateOf(false) }
+            Pill("\u2795  Save") { saveOpen = true }
+            Pill("\u2B07  Download") { downloadOpen = true }
+            if (saveOpen) SaveToPlaylistDialog(video) { saveOpen = false }
+            if (downloadOpen) DownloadDialog(video, qualities) { downloadOpen = false }
             Pill("\uD83C\uDFA7  Background") { nav.background(video) }
             Pill("\u2197  Share") {
                 context.startActivity(
