@@ -316,6 +316,7 @@ object Yt {
     // ---- comments
 
     class Comment(
+        val id: String?,
         val author: String,
         val authorUrl: String?,
         val avatar: String?,
@@ -328,9 +329,16 @@ object Yt {
         val hearted: Boolean,
     )
 
-    class CommentPage(val comments: List<Comment>, val next: (suspend () -> CommentPage)?, val disabled: Boolean = false)
+    class CommentPage(
+        val comments: List<Comment>,
+        val next: (suspend () -> CommentPage)?,
+        val disabled: Boolean = false,
+        /** Total comments on the video, or -1 if unknown. */
+        val count: Long = -1,
+    )
 
     private fun toComment(c: org.schabi.newpipe.extractor.comments.CommentsInfoItem) = Comment(
+        id = runCatching { c.commentId }.getOrNull(),
         author = c.uploaderName ?: "",
         authorUrl = c.uploaderUrl,
         avatar = c.uploaderAvatars.best(120),
@@ -355,8 +363,13 @@ object Yt {
     fun comments(url: String): CommentPage {
         val info = org.schabi.newpipe.extractor.comments.CommentsInfo.getInfo(service, url)
         if (info.isCommentsDisabled) return CommentPage(emptyList(), null, disabled = true)
-        return CommentPage(info.relatedItems.map { toComment(it) }, morePages(url, info.nextPage))
+        val count = runCatching { info.commentsCount.toLong() }.getOrDefault(-1L)
+        return CommentPage(info.relatedItems.map { toComment(it) }, morePages(url, info.nextPage), count = count)
     }
+
+    /** The 11-character video ID from a watch or shorts link. */
+    fun videoId(url: String): String? =
+        Regex("(?:v=|/shorts/|youtu\\.be/|/embed/|/live/)([A-Za-z0-9_-]{11})").find(url)?.groupValues?.get(1)
 
     fun replies(url: String, page: Page): CommentPage {
         val more = org.schabi.newpipe.extractor.comments.CommentsInfo.getMoreItems(service, url, page)

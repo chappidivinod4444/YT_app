@@ -3,6 +3,8 @@ package app.vidflow.core
 import android.content.Context
 import kotlinx.coroutines.flow.MutableStateFlow
 import okhttp3.FormBody
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.OkHttpClient
 import org.json.JSONObject
 import java.io.IOException
@@ -53,7 +55,8 @@ object TakeoutImport {
  * The access token comes from Google Play services and is never stored.
  */
 object GoogleAccount {
-    const val SCOPE = "https://www.googleapis.com/auth/youtube.readonly"
+    /** Read your subscriptions/playlists and post comments. */
+    const val SCOPE = "https://www.googleapis.com/auth/youtube.force-ssl"
 
     val signedIn = MutableStateFlow(false)
     val name = MutableStateFlow<String?>(null)
@@ -184,6 +187,88 @@ object GoogleAccount {
             }
             return JSONObject(body)
         }
+    }
+
+    private fun send(path: String, body: JSONObject): JSONObject {
+        val t = token ?: throw ApiException("Please sign in again.", needsSignIn = true)
+        val req = okhttp3.Request.Builder()
+            .url("https://www.googleapis.com/youtube/v3/$path")
+            .header("Authorization", "Bearer $t")
+            .post(body.toString().toRequestBody("application/json".toMediaTypeOrNull()))
+            .build()
+        http.newCall(req).execute().use { r ->
+            val text = r.body?.string().orEmpty()
+            if (r.code == 401) {
+                token = null
+                throw ApiException("Your Google sign-in expired. Try again.", needsSignIn = true)
+            }
+            if (!r.isSuccessful) {
+                val reason = runCatching {
+                    JSONObject(text).getJSONObject("error").getJSONArray("errors").getJSONObject(0).optString("reason")
+                }.getOrDefault("")
+                throw ApiException(
+                    when (reason) {
+                        "insufficientPermissions", "ACCESS_TOKEN_SCOPE_INSUFFICIENT" -> {
+                            token = null
+                            "Google needs your OK to post comments. Tap send again."
+                        }
+                        "commentsDisabled" -> "Comments are turned off for this video."
+                        "forbidden" -> "YouTube didn't allow this comment. Your account may need a YouTube channel first."
+                        "accessNotConfigured" -> "Turn on \"YouTube Data API v3\" in your Google Cloud project, then try again."
+                        "quotaExceeded" -> "Daily limit for your Google project reached. Try again tomorrow."
+                        else -> "Google said: HTTP ${r.code} $reason"
+                    },
+                    needsSignIn = reason == "insufficientPermissions" || reason == "ACCESS_TOKEN_SCOPE_INSUFFICIENT",
+                )
+            }
+            return JSONObject(text)
+        }
+    }
+
+    private fun commentFrom(s: JSONObject, id: String?, replies: Int = 0) = app.vidflow.core.Yt.Comment(
+        id = id,
+        author = s.optString("authorDisplayName"),
+        authorUrl = s.optString("authorChannelUrl").ifEmpty { null },
+        avatar = s.optString("authorProfileImageUrl").ifEmpty { null },
+        text = plainText(s.optString("textDisplay")),
+        likes = s.optInt("likeCount"),
+        date = s.optString("publishedAt").takeIf { it.isNotEmpty() }?.let {
+            runCatching { timeAgo(java.time.OffsetDateTime.parse(it).toInstant().toEpochMilli()) }.getOrNull()
+        },
+        replyCount = replies,
+        replies = null,
+        pinned = false,
+        hearted = false,
+    )
+
+    /** Posts a new comment on a video. Blocking. */
+    fun postComment(videoId: String, text: String): app.vidflow.core.Yt.Comment {
+        val body = JSONObject().put(
+            "snippet", JSONObject().put("videoId", videoId)
+                .put("topLevelComment", JSONObject().put("snippet", JSONObject().put("textOriginal", text)))
+        )
+        val r = send("commentThreads?part=snippet", body)
+        val top = r.getJSONObject("snippet").getJSONObject("topLevelComment")
+        return commentFrom(top.getJSONObject("snippet"), top.optString("id"))
+    }
+
+    /** Replies to a comment. Blocking. */
+    fun reply(parentId: String, text: String): app.vidflow.core.Yt.Comment {
+        val body = JSONObject().put("snippet", JSONObject().put("parentId", parentId).put("textOriginal", text))
+        val r = send("comments?part=snippet", body)
+        return commentFrom(r.getJSONObject("snippet"), r.optString("id"))
+    }
+
+    /** Newest comments first (needs sign-in). Blocking. */
+    fun newestComments(videoId: String, pageToken: String? = null): Pair<List<app.vidflow.core.Yt.Comment>, String?> {
+        val o = get("commentThreads?part=snippet&order=time&maxResults=30&textFormat=html&videoId=$videoId" + (pageToken?.let { "&pageToken=$it" } ?: ""))
+        val items = o.optJSONArray("items") ?: org.json.JSONArray()
+        val list = (0 until items.length()).map { i ->
+            val sn = items.getJSONObject(i).getJSONObject("snippet")
+            val top = sn.getJSONObject("topLevelComment")
+            commentFrom(top.getJSONObject("snippet"), top.optString("id"), sn.optInt("totalReplyCount"))
+        }
+        return list to o.optString("nextPageToken").ifEmpty { null }
     }
 
     private fun thumb(t: JSONObject): String? =

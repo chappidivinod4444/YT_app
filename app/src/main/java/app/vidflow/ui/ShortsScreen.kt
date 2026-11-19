@@ -24,6 +24,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.outlined.Reply
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.Comment
@@ -290,54 +295,65 @@ private fun ShortPage(v: Video, active: Boolean, nav: Nav) {
         val avatar = info?.uploaderAvatars?.best(200) ?: v.channelAvatar
         val channelName = info?.uploaderName ?: v.channel
 
+        var comments by remember(v.url) { mutableStateOf(-1L) }
+        LaunchedEffect(active, v.url) { if (active && comments < 0) comments = commentCount(v.url) }
+
         // Bottom: actions column on the right, channel and title on the left (like YouTube).
         Row(
             Modifier
                 .align(Alignment.BottomStart)
                 .fillMaxWidth()
-                .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0x99000000))))
-                .padding(start = 14.dp, end = 6.dp, top = 40.dp, bottom = 14.dp),
+                .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0x80000000))))
+                .padding(start = 12.dp, end = 4.dp, top = 30.dp, bottom = 12.dp),
             verticalAlignment = Alignment.Bottom,
         ) {
-            Column(Modifier.weight(1f).padding(end = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(Modifier.weight(1f).padding(end = 6.dp, bottom = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Channel pill: picture + subscribe (+) / subscribed (✓), like YouTube.
                     Row(
                         Modifier
-                            .weight(1f, fill = false)
-                            .clickable(enabled = channelUrl != null) { channelUrl?.let(nav.channel) },
+                            .clip(RoundedCornerShape(24.dp))
+                            .background(Color(0x40FFFFFF))
+                            .padding(3.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Avatar(avatar, 32)
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            channelName,
-                            color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis, style = Shadowed,
-                        )
+                        Box(Modifier.clip(CircleShape).clickable(enabled = channelUrl != null) { channelUrl?.let(nav.channel) }) {
+                            Avatar(avatar, 34)
+                        }
+                        if (channelUrl != null) {
+                            Box(
+                                Modifier
+                                    .size(34.dp)
+                                    .clip(CircleShape)
+                                    .clickable { Library.toggle(channelUrl, channelName, avatar) },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    if (subscribed) Icons.Filled.Check else Icons.Filled.Add,
+                                    contentDescription = if (subscribed) "Subscribed" else "Subscribe",
+                                    tint = Color.White, modifier = Modifier.size(24.dp),
+                                )
+                            }
+                        }
                     }
-                    if (channelUrl != null) {
-                        Spacer(Modifier.width(10.dp))
-                        Text(
-                            if (subscribed) "Subscribed" else "Subscribe",
-                            color = if (subscribed) Color.White else Color.Black,
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 13.sp,
-                            modifier = Modifier
-                                .background(if (subscribed) Color(0x40FFFFFF) else Color.White, RoundedCornerShape(18.dp))
-                                .clickable { Library.toggle(channelUrl, channelName, avatar) }
-                                .padding(horizontal = 14.dp, vertical = 7.dp),
-                        )
-                    }
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        androidx.compose.ui.text.buildAnnotatedString {
+                            pushStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.SemiBold))
+                            append(channelName)
+                            pop()
+                            append("  ")
+                            append(info?.name ?: v.title)
+                        },
+                        color = Color.White, fontSize = 14.sp, lineHeight = 19.sp,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis, style = Shadowed,
+                    )
                 }
-                Text(
-                    info?.name ?: v.title, color = Color.White, maxLines = 2, overflow = TextOverflow.Ellipsis,
-                    fontSize = 14.sp, style = Shadowed,
-                )
             }
 
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(14.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 val likes = info?.likeCount ?: -1
                 val likedList by app.vidflow.core.Saved.liked.collectAsState()
@@ -347,21 +363,21 @@ private fun ShortPage(v: Video, active: Boolean, nav: Nav) {
                     if (likes >= 0) formatCount(likes + if (liked) 1 else 0) else "Like",
                     tint = if (liked) Color(0xFFFF3B5C) else Color.White,
                 ) { app.vidflow.core.Saved.toggleLike(v) }
-                SideAction(Icons.Outlined.Comment, "Comments") { showComments = true }
+                SideAction(Icons.Outlined.Comment, if (comments >= 0) formatCount(comments) else "Comments") { showComments = true }
                 SideAction(Icons.Outlined.BookmarkBorder, "Save") { showSave = true }
-                SideAction(Icons.Outlined.FileDownload, "Download") { showDownload = true }
-                SideAction(Icons.Outlined.Share, "Share") {
+                SideAction(Icons.Outlined.Reply, "Share", mirror = true) {
                     context.startActivity(
                         Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, v.url), "Share")
                             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     )
                 }
+                SideAction(Icons.Outlined.FileDownload, "Download") { showDownload = true }
                 Box(
                     Modifier
                         .padding(top = 2.dp)
-                        .size(40.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .border(2.dp, Color.White, RoundedCornerShape(8.dp))
+                        .size(42.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .border(2.dp, Color.White, RoundedCornerShape(10.dp))
                         .clickable(enabled = channelUrl != null) { channelUrl?.let(nav.channel) },
                 ) {
                     AsyncImage(model = avatar, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
@@ -386,21 +402,24 @@ private val Shadowed = androidx.compose.ui.text.TextStyle(
     shadow = androidx.compose.ui.graphics.Shadow(Color(0xCC000000), blurRadius = 8f),
 )
 
+/** One of the buttons on the right: a plain icon with a soft shadow and a label, like YouTube. */
 @Composable
-private fun SideAction(icon: ImageVector, label: String, tint: Color = Color.White, onClick: () -> Unit) {
+private fun SideAction(icon: ImageVector, label: String, tint: Color = Color.White, mirror: Boolean = false, onClick: () -> Unit) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
-            .width(64.dp)
+            .width(62.dp)
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick),
     ) {
-        Box(
-            Modifier.size(46.dp).background(Color(0x33000000), CircleShape),
-            contentAlignment = Alignment.Center,
-        ) { Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(28.dp)) }
+        Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+            val flip = Modifier.graphicsLayer { if (mirror) scaleX = -1f }
+            // Shadow: a blurred dark copy behind the icon keeps it readable on bright videos.
+            Icon(icon, contentDescription = null, tint = Color(0x99000000), modifier = flip.size(32.dp).blur(3.dp))
+            Icon(icon, contentDescription = label, tint = tint, modifier = flip.size(32.dp))
+        }
         Text(
             label, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium,
-            maxLines = 1, style = Shadowed, modifier = Modifier.padding(top = 2.dp),
+            maxLines = 1, style = Shadowed,
         )
     }
 }
