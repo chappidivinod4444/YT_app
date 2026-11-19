@@ -23,11 +23,20 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.FavoriteBorder
-import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.outlined.Comment
+import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.FileDownload
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material.icons.outlined.VolumeOff
+import androidx.compose.material.icons.outlined.VolumeUp
+import androidx.compose.foundation.border
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -139,12 +148,15 @@ fun ShortsScreen(
             videos.isEmpty() -> ShortsSkeleton()
             else -> {
                 val pager = rememberPagerState(initialPage = startIndex.coerceIn(0, videos.lastIndex)) { videos.size }
-                LaunchedEffect(pager.settledPage, videos.size) {
-                    // Load more well before the end, and warm up the next two.
-                    if (pager.settledPage >= videos.size - 4 && list.next != null) list.loadMore()
-                    for (k in 1..2) {
-                        val v = videos.getOrNull(pager.settledPage + k) ?: break
-                        launch(Dispatchers.IO) { runCatching { Yt.stream(v.url) } }
+                LaunchedEffect(pager.currentPage, videos.size) {
+                    // Load more well before the end, and pre-load the start of the next three
+                    // so they begin playing the moment you swipe.
+                    if (pager.currentPage >= videos.size - 5 && list.next != null) list.loadMore()
+                    for (k in 0..3) {
+                        val v = videos.getOrNull(pager.currentPage + k) ?: break
+                        launch(Dispatchers.IO) {
+                            runCatching { PlayerHolder.prefetch(Yt.stream(v.url), SHORTS_HEIGHT) }
+                        }
                     }
                 }
                 VerticalPager(
@@ -160,19 +172,23 @@ fun ShortsScreen(
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(start = 16.dp, end = 4.dp, top = 6.dp),
+                .background(Brush.verticalGradient(listOf(Color(0x99000000), Color.Transparent)))
+                .padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Shorts", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp, modifier = Modifier.weight(1f))
+            Text("Shorts", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 22.sp, modifier = Modifier.weight(1f))
             var muted by remember { mutableStateOf(PlayerHolder.player.volume == 0f) }
             IconButton(onClick = { muted = !muted; PlayerHolder.player.volume = if (muted) 0f else 1f }) {
-                Text(if (muted) "\uD83D\uDD07" else "\uD83D\uDD0A", fontSize = 20.sp)
+                Icon(
+                    if (muted) Icons.Outlined.VolumeOff else Icons.Outlined.VolumeUp,
+                    contentDescription = if (muted) "Unmute" else "Mute", tint = Color.White,
+                )
             }
             IconButton(onClick = nav.search) {
-                Icon(androidx.compose.material.icons.Icons.Filled.Search, contentDescription = "Search", tint = Color.White)
+                Icon(Icons.Outlined.Search, contentDescription = "Search", tint = Color.White)
             }
             IconButton(onClick = { generation++ }) {
-                Icon(Icons.Filled.Refresh, contentDescription = "New shorts", tint = Color.White)
+                Icon(Icons.Outlined.Refresh, contentDescription = "New shorts", tint = Color.White)
             }
         }
     }
@@ -212,7 +228,7 @@ private fun ShortPage(v: Video, active: Boolean, nav: Nav) {
                 channelAvatar = i.uploaderAvatars.best(200) ?: v.channelAvatar,
                 short = true,
             )
-            PlayerHolder.play(full, i, height = 720, resumeAt = 0, loop = true)
+            PlayerHolder.play(full, i, height = SHORTS_HEIGHT, resumeAt = 0, loop = true)
             launch(Dispatchers.Default) { Yt.addSuggestions(i) }
         } catch (t: Throwable) {
             error = friendlyError(t)
@@ -259,7 +275,7 @@ private fun ShortPage(v: Video, active: Boolean, nav: Nav) {
             Box(
                 Modifier.size(72.dp).background(Color(0x66000000), CircleShape),
                 contentAlignment = Alignment.Center,
-            ) { Text("▶", color = Color.White, fontSize = 30.sp) }
+            ) { Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(44.dp)) }
         }
 
         val channelUrl = info?.uploaderUrl ?: v.channelUrl
@@ -271,86 +287,86 @@ private fun ShortPage(v: Video, active: Boolean, nav: Nav) {
         if (showSave) SaveToPlaylistDialog(v) { showSave = false }
         if (showDownload) DownloadDialog(v, listOf(1080, 720, 480)) { showDownload = false }
 
-        // Actions on the right side.
-        Column(
-            Modifier
-                .align(Alignment.BottomEnd)
-                .padding(end = 10.dp, bottom = 110.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(18.dp),
-        ) {
-            val likes = info?.likeCount ?: -1
-            val likedList by app.vidflow.core.Saved.liked.collectAsState()
-            val liked = likedList.any { it.url == v.url }
-            SideAction(
-                null,
-                if (likes >= 0) formatCount(likes + if (liked) 1 else 0) else "Like",
-                icon = {
-                    Icon(
-                        if (liked) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                        contentDescription = "Like",
-                        tint = if (liked) MaterialTheme.colorScheme.primary else Color.White,
-                        modifier = Modifier.size(28.dp),
-                    )
-                },
-            ) { app.vidflow.core.Saved.toggleLike(v) }
-            SideAction("\uD83D\uDCAC", "Comments") { showComments = true }
-            SideAction("\u2795", "Save") { showSave = true }
-            SideAction("\u2B07", "Download") { showDownload = true }
-            SideAction(null, "Share", icon = { Icon(Icons.Filled.Share, contentDescription = null, tint = Color.White) }) {
-                context.startActivity(
-                    Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, v.url), "Share")
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                )
-            }
-            Box(Modifier.clickable(enabled = channelUrl != null) { channelUrl?.let(nav.channel) }) {
-                Avatar(info?.uploaderAvatars?.best(200) ?: v.channelAvatar, 40)
-            }
-        }
+        val avatar = info?.uploaderAvatars?.best(200) ?: v.channelAvatar
+        val channelName = info?.uploaderName ?: v.channel
 
-        // Title, channel and subscribe at the bottom.
-        Column(
+        // Bottom: actions column on the right, channel and title on the left (like YouTube).
+        Row(
             Modifier
                 .align(Alignment.BottomStart)
                 .fillMaxWidth()
-                .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xB3000000))))
-                .padding(start = 16.dp, end = 72.dp, top = 48.dp, bottom = 18.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+                .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0x99000000))))
+                .padding(start = 14.dp, end = 6.dp, top = 40.dp, bottom = 14.dp),
+            verticalAlignment = Alignment.Bottom,
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Row(
-                    Modifier
-                        .weight(1f, fill = false)
-                        .clickable(enabled = channelUrl != null) { channelUrl?.let(nav.channel) },
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Avatar(info?.uploaderAvatars?.best(200) ?: v.channelAvatar, 30)
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        info?.uploaderName ?: v.channel,
-                        color = Color.White, fontWeight = FontWeight.SemiBold,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+            Column(Modifier.weight(1f).padding(end = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        Modifier
+                            .weight(1f, fill = false)
+                            .clickable(enabled = channelUrl != null) { channelUrl?.let(nav.channel) },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Avatar(avatar, 32)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            channelName,
+                            color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis, style = Shadowed,
+                        )
+                    }
+                    if (channelUrl != null) {
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            if (subscribed) "Subscribed" else "Subscribe",
+                            color = if (subscribed) Color.White else Color.Black,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp,
+                            modifier = Modifier
+                                .background(if (subscribed) Color(0x40FFFFFF) else Color.White, RoundedCornerShape(18.dp))
+                                .clickable { Library.toggle(channelUrl, channelName, avatar) }
+                                .padding(horizontal = 14.dp, vertical = 7.dp),
+                        )
+                    }
+                }
+                Text(
+                    info?.name ?: v.title, color = Color.White, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    fontSize = 14.sp, style = Shadowed,
+                )
+            }
+
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                val likes = info?.likeCount ?: -1
+                val likedList by app.vidflow.core.Saved.liked.collectAsState()
+                val liked = likedList.any { it.url == v.url }
+                SideAction(
+                    if (liked) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+                    if (likes >= 0) formatCount(likes + if (liked) 1 else 0) else "Like",
+                    tint = if (liked) Color(0xFFFF3B5C) else Color.White,
+                ) { app.vidflow.core.Saved.toggleLike(v) }
+                SideAction(Icons.Outlined.Comment, "Comments") { showComments = true }
+                SideAction(Icons.Outlined.BookmarkBorder, "Save") { showSave = true }
+                SideAction(Icons.Outlined.FileDownload, "Download") { showDownload = true }
+                SideAction(Icons.Outlined.Share, "Share") {
+                    context.startActivity(
+                        Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, v.url), "Share")
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     )
                 }
-                if (channelUrl != null) {
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        if (subscribed) "Subscribed" else "Subscribe",
-                        color = if (subscribed) Color.White else Color.Black,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp,
-                        modifier = Modifier
-                            .background(if (subscribed) Color(0x55FFFFFF) else Color.White, RoundedCornerShape(16.dp))
-                            .clickable {
-                                Library.toggle(channelUrl, info?.uploaderName ?: v.channel, info?.uploaderAvatars?.best(200) ?: v.channelAvatar)
-                            }
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                    )
+                Box(
+                    Modifier
+                        .padding(top = 2.dp)
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .border(2.dp, Color.White, RoundedCornerShape(8.dp))
+                        .clickable(enabled = channelUrl != null) { channelUrl?.let(nav.channel) },
+                ) {
+                    AsyncImage(model = avatar, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                 }
             }
-            Text(info?.name ?: v.title, color = Color.White, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
-            val views = info?.viewCount ?: v.views
-            if (views >= 0) Text("${formatCount(views)} views", color = Color(0xCCFFFFFF), fontSize = 12.sp)
         }
 
         if (playingThis) {
@@ -364,15 +380,27 @@ private fun ShortPage(v: Video, active: Boolean, nav: Nav) {
     }
 }
 
+private const val SHORTS_HEIGHT = 720
+
+private val Shadowed = androidx.compose.ui.text.TextStyle(
+    shadow = androidx.compose.ui.graphics.Shadow(Color(0xCC000000), blurRadius = 8f),
+)
+
 @Composable
-private fun SideAction(glyph: String?, label: String, icon: (@Composable () -> Unit)? = null, onClick: () -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable(onClick = onClick)) {
-        Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
-            if (icon != null) icon() else Text(glyph ?: "", color = Color.White, fontSize = 24.sp)
-        }
+private fun SideAction(icon: ImageVector, label: String, tint: Color = Color.White, onClick: () -> Unit) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .width(64.dp)
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick),
+    ) {
+        Box(
+            Modifier.size(46.dp).background(Color(0x33000000), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) { Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(28.dp)) }
         Text(
-            label, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
-            style = androidx.compose.ui.text.TextStyle(shadow = androidx.compose.ui.graphics.Shadow(Color.Black, blurRadius = 6f)),
+            label, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+            maxLines = 1, style = Shadowed, modifier = Modifier.padding(top = 2.dp),
         )
     }
 }

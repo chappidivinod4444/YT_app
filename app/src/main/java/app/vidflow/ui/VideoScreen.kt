@@ -23,8 +23,25 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.ThumbDown
+import androidx.compose.material.icons.filled.ThumbUp
+import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.outlined.FileDownload
+import androidx.compose.material.icons.outlined.Headphones
+import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material.icons.outlined.ThumbDown
+import androidx.compose.material.icons.outlined.ThumbUp
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.sp
+import app.vidflow.core.plainText
+import app.vidflow.core.uploadedAgo
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -143,6 +160,30 @@ fun VideoScreen(video: Video, nav: Nav, onFullscreen: () -> Unit) {
     }
     val previous = PlayerHolder.session.dropLast(1).lastOrNull()?.takeIf { it.url != video.url }
 
+    val ambient by PlayerHolder.ambient.collectAsState()
+    Box(Modifier.fillMaxSize()) {
+    if (ambient) {
+        // Ambient mode: a soft glow of the video's colours under the player.
+        coil3.compose.AsyncImage(
+            model = i?.thumbnails?.best() ?: video.thumbnail,
+            contentDescription = null,
+            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(420.dp)
+                .blur(70.dp)
+                .graphicsLayer { alpha = 0.45f }
+                .drawWithContent {
+                    drawContent()
+                    drawRect(
+                        androidx.compose.ui.graphics.Brush.verticalGradient(
+                            0.35f to Color.Transparent, 1f to Color.Black,
+                        ),
+                        blendMode = androidx.compose.ui.graphics.BlendMode.DstOut,
+                    )
+                },
+        )
+    }
     Column(Modifier.fillMaxSize()) {
         Box(
             Modifier
@@ -159,6 +200,7 @@ fun VideoScreen(video: Video, nav: Nav, onFullscreen: () -> Unit) {
                     onMinimize = nav.back,
                     onNext = nextVideo?.let { n -> { nav.video(n) } },
                     onPrevious = previous?.let { p -> { PlayerHolder.session.removeAt(PlayerHolder.session.lastIndex); nav.video(p) } },
+                    onBackground = { nav.background(video) },
                 )
             } else if (video.thumbnail != null) {
                 coil3.compose.AsyncImage(
@@ -221,19 +263,23 @@ fun VideoScreen(video: Video, nav: Nav, onFullscreen: () -> Unit) {
         }
         if (showComments) CommentsSheet(video.url) { showComments = false }
     }
+    }
 }
 
 @Composable
-private fun Pill(text: String, onClick: () -> Unit) {
-    Text(
-        text,
-        style = MaterialTheme.typography.labelLarge,
-        fontWeight = FontWeight.SemiBold,
-        modifier = Modifier
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(20.dp))
+private fun Pill(icon: ImageVector?, text: String?, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(20.dp))
+            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 9.dp),
-    )
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (icon != null) Icon(icon, contentDescription = text, modifier = Modifier.size(20.dp))
+        if (icon != null && text != null) Spacer(Modifier.width(6.dp))
+        if (text != null) Text(text, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+    }
 }
 
 @Composable
@@ -243,65 +289,109 @@ private fun Details(video: Video, i: StreamInfo?, nav: Nav) {
     val channelUrl = i?.uploaderUrl ?: video.channelUrl
     val subscribed = remember(subs, channelUrl) { Library.isSubscribed(channelUrl) }
     val qualities by PlayerHolder.qualities.collectAsState()
-    val quality by PlayerHolder.quality.collectAsState()
-    var qualityMenu by remember { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val title = i?.name ?: video.title
+    val views = (i?.viewCount ?: video.views).takeIf { it >= 0 }
+    val ago = uploadedAgo(i, video.uploaded)
+    val description = plainText(i?.description?.content.orEmpty())
 
-    Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp).animateContentSize()) {
-        Text(i?.name ?: video.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        val meta = listOfNotNull(
-            (i?.viewCount ?: video.views).takeIf { it >= 0 }?.let { formatCount(it) + " views" },
-            i?.textualUploadDate ?: video.uploaded,
-            i?.likeCount?.takeIf { it >= 0 }?.let { formatCount(it) + " likes" },
-        ).joinToString(" · ")
-        Text(meta, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+    Column(Modifier.padding(top = 12.dp).animateContentSize()) {
+        // Title and one meta line; tap either for the full description.
+        Column(Modifier.clickable { expanded = !expanded }.padding(horizontal = 16.dp)) {
+            Text(
+                title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
+                maxLines = if (expanded) Int.MAX_VALUE else 2, overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                listOfNotNull(views?.let { formatCount(it) + " views" }, ago).joinToString("  ") + "  " + if (expanded) "less" else "...more",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
 
-        Row(Modifier.fillMaxWidth().padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+        // Channel: avatar, name and subscriber count, Subscribe.
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Row(
                 Modifier
                     .weight(1f)
                     .clickable(enabled = channelUrl != null) { channelUrl?.let(nav.channel) },
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Avatar(i?.uploaderAvatars?.best(200) ?: video.channelAvatar, 40)
+                Avatar(i?.uploaderAvatars?.best(200) ?: video.channelAvatar, 38)
                 Spacer(Modifier.width(10.dp))
-                Column {
-                    Text(i?.uploaderName ?: video.channel, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                    val subsCount = i?.uploaderSubscriberCount ?: -1
-                    if (subsCount >= 0) {
-                        Text("${formatCount(subsCount)} subscribers", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
+                Text(i?.uploaderName ?: video.channel, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                val subsCount = i?.uploaderSubscriberCount ?: -1
+                if (subsCount >= 0) {
+                    Spacer(Modifier.width(8.dp))
+                    Text(formatCount(subsCount), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                 }
             }
             if (channelUrl != null) {
-                SubscribeButton(subscribed) {
-                    Library.toggle(channelUrl, i?.uploaderName ?: video.channel, i?.uploaderAvatars?.best(200) ?: video.channelAvatar)
-                }
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    if (subscribed) "Subscribed" else "Subscribe",
+                    color = if (subscribed) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.surface,
+                    fontWeight = FontWeight.SemiBold, fontSize = 14.sp,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(if (subscribed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f) else MaterialTheme.colorScheme.onSurface)
+                        .clickable { Library.toggle(channelUrl, i?.uploaderName ?: video.channel, i?.uploaderAvatars?.best(200) ?: video.channelAvatar) }
+                        .padding(horizontal = 16.dp, vertical = 9.dp),
+                )
             }
         }
 
-        val context = androidx.compose.ui.platform.LocalContext.current
-        var speedMenu by remember { mutableStateOf(false) }
-        var speed by remember { mutableStateOf(PlayerHolder.player.playbackParameters.speed) }
+        // Actions: like | dislike, share, save, download, background.
         Row(
             Modifier
                 .padding(top = 12.dp)
-                .horizontalScroll(androidx.compose.foundation.rememberScrollState()),
+                .horizontalScroll(androidx.compose.foundation.rememberScrollState())
+                .padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             val likes = i?.likeCount ?: -1
             val likedList by app.vidflow.core.Saved.liked.collectAsState()
             val liked = likedList.any { it.url == video.url }
-            Pill((if (liked) "\uD83D\uDC4D " else "\uD83D\uDC4D\uFE0E ") + if (likes >= 0) formatCount(likes + if (liked) 1 else 0) else "Like") {
-                app.vidflow.core.Saved.toggleLike(PlayerHolder.current.value?.takeIf { it.url == video.url } ?: video)
+            var disliked by remember(video.url) { mutableStateOf(false) }
+            Row(
+                Modifier
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    Modifier
+                        .clickable {
+                            disliked = false
+                            app.vidflow.core.Saved.toggleLike(PlayerHolder.current.value?.takeIf { it.url == video.url } ?: video)
+                        }
+                        .padding(start = 14.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(if (liked) Icons.Filled.ThumbUp else Icons.Outlined.ThumbUp, contentDescription = "Like", modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        if (likes >= 0) formatCount(likes + if (liked) 1 else 0) else "Like",
+                        style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                Box(Modifier.width(1.dp).height(22.dp).background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f)))
+                Box(
+                    Modifier
+                        .clickable {
+                            disliked = !disliked
+                            if (disliked && liked) app.vidflow.core.Saved.toggleLike(video)
+                        }
+                        .padding(start = 12.dp, end = 14.dp, top = 8.dp, bottom = 8.dp),
+                ) {
+                    Icon(if (disliked) Icons.Filled.ThumbDown else Icons.Outlined.ThumbDown, contentDescription = "Dislike", modifier = Modifier.size(20.dp))
+                }
             }
             var saveOpen by remember { mutableStateOf(false) }
             var downloadOpen by remember { mutableStateOf(false) }
-            Pill("\u2795  Save") { saveOpen = true }
-            Pill("\u2B07  Download") { downloadOpen = true }
-            if (saveOpen) SaveToPlaylistDialog(video) { saveOpen = false }
-            if (downloadOpen) DownloadDialog(video, qualities) { downloadOpen = false }
-            Pill("\uD83C\uDFA7  Background") { nav.background(video) }
-            Pill("\u2197  Share") {
+            Pill(Icons.Outlined.Share, "Share") {
                 context.startActivity(
                     android.content.Intent.createChooser(
                         android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain").putExtra(android.content.Intent.EXTRA_TEXT, video.url),
@@ -309,54 +399,38 @@ private fun Details(video: Video, i: StreamInfo?, nav: Nav) {
                     ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
                 )
             }
-            Box {
-                Pill(if (speed == 1f) "\u23E9  Speed" else "\u23E9  ${speed}x") { speedMenu = true }
-                DropdownMenu(expanded = speedMenu, onDismissRequest = { speedMenu = false }) {
-                    listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f).forEach { s ->
-                        DropdownMenuItem(
-                            text = { Text((if (s == 1f) "Normal" else "${s}x") + if (s == speed) "  \u2713" else "") },
-                            onClick = { speedMenu = false; speed = s; PlayerHolder.setSpeed(s) },
-                        )
-                    }
-                }
-            }
-            if (qualities.isNotEmpty()) {
-                Box {
-                    Pill("\u2699  " + if (quality > 0) "${quality}p" else "Quality") { qualityMenu = true }
-                    DropdownMenu(expanded = qualityMenu, onDismissRequest = { qualityMenu = false }) {
-                        qualities.forEach { h ->
-                            DropdownMenuItem(
-                                text = { Text("${h}p" + if (h == quality) "  ✓" else "") },
-                                onClick = { qualityMenu = false; PlayerHolder.changeQuality(h) },
-                            )
-                        }
-                    }
-                }
-            }
+            Pill(Icons.Outlined.FileDownload, "Download") { downloadOpen = true }
+            Pill(Icons.Outlined.BookmarkBorder, "Save") { saveOpen = true }
+            Pill(Icons.Outlined.Headphones, "Background") { nav.background(video) }
+            if (saveOpen) SaveToPlaylistDialog(video) { saveOpen = false }
+            if (downloadOpen) DownloadDialog(video, qualities) { downloadOpen = false }
         }
 
-        val description = i?.description?.content.orEmpty()
-            .replace(Regex("<br\\s*/?>"), "\n").replace(Regex("<[^>]+>"), "")
-            .replace("&amp;", "&").replace("&quot;", "\"").replace("&#39;", "'").replace("&lt;", "<").replace("&gt;", ">")
-        if (description.isNotBlank()) {
+        // Full description when expanded.
+        if (expanded) {
             Column(
                 Modifier
                     .fillMaxWidth()
+                    .padding(horizontal = 12.dp)
                     .padding(top = 12.dp)
-                    .background(MaterialTheme.colorScheme.surfaceContainer, RoundedCornerShape(12.dp))
-                    .clickable { expanded = !expanded }
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+                    .clickable { expanded = false }
                     .padding(12.dp)
             ) {
                 Text(
-                    description,
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = if (expanded) Int.MAX_VALUE else 3,
+                    listOfNotNull(
+                        views?.let { java.text.NumberFormat.getIntegerInstance().format(it) + " views" },
+                        i?.textualUploadDate?.takeIf { !it.contains("T") } ?: ago,
+                    ).joinToString("  "),
+                    style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold,
                 )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(if (expanded) "Show less" else "More", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-                    if (!expanded) Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null)
+                if (description.isNotBlank()) {
+                    Text(description, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
                 }
+                Text("Show less", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp))
             }
         }
+        Spacer(Modifier.height(4.dp))
     }
 }

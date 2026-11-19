@@ -526,3 +526,37 @@ fun formatDuration(sec: Long): String {
     val s = sec % 60
     return if (h > 0) String.format(Locale.US, "%d:%02d:%02d", h, m, s) else String.format(Locale.US, "%d:%02d", m, s)
 }
+
+/** "3 months ago" from a video's upload date; falls back to the text YouTube gave. */
+fun uploadedAgo(i: org.schabi.newpipe.extractor.stream.StreamInfo?, fallback: String?): String? {
+    val millis = try {
+        i?.uploadDate?.offsetDateTime()?.toInstant()?.toEpochMilli()
+    } catch (_: Throwable) {
+        null
+    }
+    if (millis != null) return timeAgo(millis)
+    val t = i?.textualUploadDate ?: fallback ?: return null
+    // Raw ISO dates like 2026-07-31T23:06:57-07:00.
+    return runCatching { timeAgo(java.time.OffsetDateTime.parse(t).toInstant().toEpochMilli()) }.getOrDefault(t)
+}
+
+fun timeAgo(millis: Long): String {
+    val s = ((System.currentTimeMillis() - millis) / 1000).coerceAtLeast(0)
+    fun p(n: Long, unit: String) = "$n $unit${if (n == 1L) "" else "s"} ago"
+    return when {
+        s < 60 -> "Just now"
+        s < 3600 -> p(s / 60, "minute")
+        s < 86_400 -> p(s / 3600, "hour")
+        s < 7 * 86_400 -> p(s / 86_400, "day")
+        s < 30 * 86_400 -> p(s / (7 * 86_400), "week")
+        s < 365 * 86_400 -> p(s / (30 * 86_400), "month")
+        else -> p(s / (365 * 86_400), "year")
+    }
+}
+
+/** Turns YouTube's HTML description into plain text. */
+fun plainText(html: String): String = html
+    .replace(Regex("<br\\s*/?>"), "\n").replace(Regex("<[^>]+>"), "")
+    .replace("&nbsp;", " ").replace("&amp;", "&").replace("&quot;", "\"").replace("&#39;", "'")
+    .replace("&lt;", "<").replace("&gt;", ">")
+    .replace(Regex("&#(\\d+);")) { m -> m.groupValues[1].toIntOrNull()?.let { String(Character.toChars(it)) } ?: m.value }

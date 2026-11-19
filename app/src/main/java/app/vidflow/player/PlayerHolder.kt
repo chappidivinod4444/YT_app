@@ -71,11 +71,45 @@ object PlayerHolder {
 
     private var controller: MediaController? = null
 
+    /** Touch controls are locked (Lock screen in the settings sheet). */
+    val locked = MutableStateFlow(false)
+    /** Soft glow of the video's colours behind the page. */
+    val ambient = MutableStateFlow(true)
+    /** Minutes left on the sleep timer: 0 = off, -1 = at the end of this video. */
+    val sleep = MutableStateFlow(0)
+    private val sleepRunnable = Runnable { player.pause(); sleep.value = 0 }
+
+    /** Recent video bytes on disk, so shorts and replays start instantly. */
+    private lateinit var cache: androidx.media3.datasource.cache.SimpleCache
+    private lateinit var cached: androidx.media3.datasource.cache.CacheDataSource.Factory
+    private val prefetchPool = java.util.concurrent.Executors.newFixedThreadPool(3)
+    private val prefetched = java.util.Collections.synchronizedSet(HashSet<String>())
+
     fun init(context: Context) {
         app = context.applicationContext
+        ambient.value = app.getSharedPreferences("settings", Context.MODE_PRIVATE).getBoolean("ambient", true)
+        cache = androidx.media3.datasource.cache.SimpleCache(
+            java.io.File(app.cacheDir, "media"),
+            androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor(300L * 1024 * 1024),
+            androidx.media3.database.StandaloneDatabaseProvider(app),
+        )
+        cached = androidx.media3.datasource.cache.CacheDataSource.Factory()
+            .setCache(cache)
+            .setUpstreamDataSourceFactory(ChunkedHttpDataSource.Factory(streamClient))
+            .setFlags(androidx.media3.datasource.cache.CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+            // Same file = same key, even if request-only parameters differ.
+            .setCacheKeyFactory { spec ->
+                val u = spec.uri
+                if (u.query == null) u.toString()
+                else u.buildUpon().clearQuery().apply {
+                    for (name in u.queryParameterNames) if (name != "rn" && name != "range" && name != "cpn") {
+                        u.getQueryParameter(name)?.let { appendQueryParameter(name, it) }
+                    }
+                }.build().toString()
+            }
         // Smaller start buffer: videos begin playing sooner.
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
-            .setBufferDurationsMs(12_000, 45_000, 800, 1_500)
+            .setBufferDurationsMs(12_000, 45_000, 500, 1_200)
             .build()
         player = ExoPlayer.Builder(app)
             .setLoadControl(loadControl)
@@ -89,7 +123,13 @@ object PlayerHolder {
             .build()
         player.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
-                if (state == Player.STATE_ENDED && player.repeatMode == Player.REPEAT_MODE_OFF) endedCount.value++
+                if (state == Player.STATE_ENDED && player.repeatMode == Player.REPEAT_MODE_OFF) {
+                    if (sleep.value == -1) {
+                        sleep.value = 0
+                        return
+                    }
+                    endedCount.value++
+                }
             }
 
             override fun onPlayerError(e: PlaybackException) {
@@ -206,6 +246,51 @@ object PlayerHolder {
         player.repeatMode = if (on) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
     }
 
+    fun setAmbient(on: Boolean) {
+        ambient.value = on
+        app.getSharedPreferences("settings", Context.MODE_PRIVATE).edit().putBoolean("ambient", on).apply()
+    }
+
+    /** Pause after [minutes]; -1 = when this video ends; 0 = off. */
+    fun setSleep(minutes: Int) {
+        main.removeCallbacks(sleepRunnable)
+        sleep.value = minutes
+        if (minutes > 0) main.postDelayed(sleepRunnable, minutes * 60_000L)
+    }
+
+    /**
+     * Downloads the first second or two of a video in the background, so when you
+     * swipe to it, it starts at once from the disk cache.
+     */
+    fun prefetch(i: StreamInfo, height: Int) {
+        if (!prefetched.add(i.url)) return
+        prefetchPool.execute {
+            try {
+                val (video, audio) = pick(i, height) ?: return@execute
+                for ((url, bytes) in listOf(video.content to 1_500_000L, audio.content to 300_000L)) {
+                    val spec = androidx.media3.datasource.DataSpec.Builder().setUri(url).setPosition(0).setLength(bytes).build()
+                    androidx.media3.datasource.cache.CacheWriter(cached.createDataSource(), spec, null, null).cache()
+                }
+            } catch (_: Throwable) {
+                prefetched.remove(i.url)
+            }
+        }
+    }
+
+    private fun pick(i: StreamInfo, wantHeight: Int): Pair<VideoStream, AudioStream>? {
+        val videos = videoChoices(i)
+        val audios = i.audioStreams.filter { it.isUrl && it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP && it.itagItem != null }
+        if (videos.isEmpty() || audios.isEmpty() || i.duration <= 0) return null
+        // Prefer the chosen height (or the closest below it), H.264 first for smooth hardware decoding.
+        val byHeight = videos.groupBy { it.heightOrParsed() }
+        val target = byHeight.keys.filter { it <= wantHeight }.maxOrNull() ?: byHeight.keys.min()
+        val candidates = byHeight[target].orEmpty()
+        val video = candidates.firstOrNull { it.format == MediaFormat.MPEG_4 } ?: candidates.first()
+        val audio = audios.filter { it.format == MediaFormat.M4A }.maxByOrNull { it.averageBitrate }
+            ?: audios.maxBy { it.averageBitrate }
+        return video to audio
+    }
+
     fun chapterAt(ms: Long): String? = chapters.value.lastOrNull { it.first <= ms }?.second
 
     fun stop() {
@@ -239,7 +324,7 @@ object PlayerHolder {
 
     /** Picks the streams and builds a media source. Returns it with the chosen height. */
     private fun buildSource(v: Video, i: StreamInfo, wantHeight: Int): Pair<MediaSource, Int> {
-        val chunked = ChunkedHttpDataSource.Factory(streamClient)
+        val chunked = cached
 
         // Live streams come as HLS playlists.
         if (i.hlsUrl.isNotEmpty() && (v.live || i.videoOnlyStreams.isEmpty())) {
@@ -247,16 +332,10 @@ object PlayerHolder {
             return HlsMediaSource.Factory(http).createMediaSource(mediaItem(i.hlsUrl, v, i)) to 0
         }
 
-        val videos = videoChoices(i)
-        val audios = i.audioStreams.filter { it.isUrl && it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP && it.itagItem != null }
-        if (videos.isNotEmpty() && audios.isNotEmpty() && i.duration > 0) {
-            // Prefer the chosen height (or the closest below it), H.264 first for smooth hardware decoding.
-            val byHeight = videos.groupBy { it.heightOrParsed() }
-            val target = byHeight.keys.filter { it <= wantHeight }.maxOrNull() ?: byHeight.keys.min()
-            val candidates = byHeight[target].orEmpty()
-            val video = candidates.firstOrNull { it.format == MediaFormat.MPEG_4 } ?: candidates.first()
-            val audio = audios.filter { it.format == MediaFormat.M4A }.maxByOrNull { it.averageBitrate }
-                ?: audios.maxBy { it.averageBitrate }
+        val picked = pick(i, wantHeight)
+        if (picked != null) {
+            val (video, audio) = picked
+            val target = video.heightOrParsed()
             val videoSource = dash(video.content, video.itagItem!!, i.duration, chunked, v, i)
             val audioSource = dash(audio.content, audio.itagItem!!, i.duration, chunked, v, i)
             val subs = subtitleChoices(i).map { s ->
@@ -289,7 +368,7 @@ object PlayerHolder {
         url: String,
         itag: org.schabi.newpipe.extractor.services.youtube.ItagItem,
         durationSec: Long,
-        factory: ChunkedHttpDataSource.Factory,
+        factory: androidx.media3.datasource.DataSource.Factory,
         v: Video,
         i: StreamInfo,
     ): MediaSource {
