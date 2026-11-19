@@ -198,6 +198,7 @@ fun HomeScreen(nav: Nav, openExplore: () -> Unit, openNotifications: () -> Unit)
             },
             cached = { app.vidflow.core.HomeCache.load() },
             onLoaded = { app.vidflow.core.HomeCache.save(it) },
+            onRefresh = { HomeShorts.reset() },
         )
     } else {
         val t = tab
@@ -213,16 +214,27 @@ object HomeShorts {
     private var next: (suspend () -> Paged)? = null
     private var loading = false
 
+    /** New shorts for every grid (pull to refresh on Home). */
+    suspend fun reset() {
+        pool.value = emptyList()
+        next = null
+        loading = false
+        ensure(3)
+    }
+
     /** Makes sure there are enough shorts for [grids] grids. */
     suspend fun ensure(grids: Int) {
         if (loading || pool.value.size >= grids * 4) return
         loading = true
         try {
             withContext(Dispatchers.IO) {
-                val page = next?.invoke() ?: Yt.shortsFeed(Library.subscriptions.value.map { it.url })
-                next = page.next
-                val seen = pool.value.map { it.url }.toHashSet()
-                pool.value = pool.value + page.items.filterIsInstance<Video>().filter { it.url !in seen }
+                var tries = 0
+                while (pool.value.size < grids * 4 && tries++ < 4) {
+                    val page = next?.invoke() ?: Yt.shortsFeed(Library.subscriptions.value.map { it.url })
+                    next = page.next
+                    val seen = pool.value.map { it.url }.toHashSet()
+                    pool.value = pool.value + page.items.filterIsInstance<Video>().filter { it.url !in seen }
+                }
             }
         } catch (_: Throwable) {
         } finally {

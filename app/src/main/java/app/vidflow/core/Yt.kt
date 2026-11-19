@@ -211,7 +211,8 @@ object Yt {
         val watched = history.map { it.video.url }.toHashSet()
         val pool = java.util.concurrent.Executors.newFixedThreadPool(4)
         val related = try {
-            history.take(6).map { it.video.url }.map { url ->
+            // Different recent videos each time, so pulling to refresh gives a new Home.
+            (history.take(4) + history.drop(4).take(30).shuffled().take(3)).map { it.video.url }.map { url ->
                 pool.submit<List<Video>> {
                     try {
                         related(stream(url)).filterIsInstance<Video>().filter { !it.short }.shuffled().take(8)
@@ -226,7 +227,10 @@ object Yt {
         val fromSubs = Feed.videos.value.orEmpty().filter { !it.short }.take(12)
         val kioskId = kiosks().firstOrNull()
         val popular = kioskId?.let { runCatching { kiosk(it) }.getOrNull() }
-        val sources = (related + listOf(fromSubs, popular?.items?.filterIsInstance<Video>().orEmpty()))
+        val topicVideos = Topics.list.value.randomOrNull()?.let { t ->
+            runCatching { topicPage(t).filterIsInstance<Video>() }.getOrDefault(emptyList())
+        }.orEmpty()
+        val sources = (related + listOf(fromSubs.shuffled(), popular?.items?.filterIsInstance<Video>().orEmpty().shuffled(), topicVideos.shuffled()))
             .map { it.toMutableList() }.filter { it.isNotEmpty() }
         val mixed = ArrayList<Video>()
         var i = 0
@@ -251,7 +255,8 @@ object Yt {
         round: Int,
     ): suspend () -> Paged = {
         val pool = java.util.concurrent.Executors.newFixedThreadPool(4)
-        val picked = generateSequence { if (seeds.isEmpty()) null else seeds.removeAt(seeds.indices.random()) }.take(4).toList()
+        // Keep a few seeds around so the feed never runs dry.
+        val picked = if (seeds.size > 8) List(4) { seeds.removeAt(seeds.indices.random()) } else seeds.shuffled().take(4)
         val lists = try {
             val related = picked.map { v ->
                 pool.submit<List<Video>> {
@@ -260,7 +265,7 @@ object Yt {
             }
             val topic = Topics.list.value.randomOrNull()?.let { t ->
                 pool.submit<List<Video>> {
-                    runCatching { topic(t).items.filterIsInstance<Video>() }.getOrDefault(emptyList())
+                    runCatching { topicPage(t).filterIsInstance<Video>() }.getOrDefault(emptyList())
                 }
             }
             related.map { runCatching { it.get() }.getOrDefault(emptyList()).shuffled().take(8) } +
@@ -290,6 +295,16 @@ object Yt {
         seeds.addAll(out.shuffled().take(8))
         if (seeds.isEmpty()) Library.history.value.take(10).forEach { seeds.add(it.video) }
         Paged(out, if (round < 200) moreRecommended(seeds, shown, nextPopular, round + 1) else null)
+    }
+
+    /** Next page of a topic each time it's asked, so Home keeps finding new videos. */
+    private val topicNext = ConcurrentHashMap<String, suspend () -> Paged>()
+
+    private fun topicPage(t: String): List<Item> {
+        val next = topicNext.remove(t)
+        val p = if (next != null) kotlinx.coroutines.runBlocking { next() } else topic(t)
+        p.next?.let { topicNext[t] = it }
+        return p.items
     }
 
     /** Videos for a topic chip like "Music" or "Telugu cinema". */

@@ -440,12 +440,15 @@ class PagedList {
     var loading by mutableStateOf(false)
     var refreshing by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
+    /** Loading more failed; the list shows a retry button. */
+    var moreFailed by mutableStateOf(false)
     var loadedAt = 0L
 
     fun set(p: Paged) {
         items.clear()
         items.addAll(p.items)
         next = p.next
+        moreFailed = false
         loadedAt = System.currentTimeMillis()
     }
 
@@ -453,13 +456,24 @@ class PagedList {
         val n = next ?: return
         if (loading) return
         loading = true
+        moreFailed = false
         try {
-            val p = withContext(Dispatchers.IO) { n() }
-            val seen = items.map { it.url }.toHashSet()
-            items.addAll(p.items.filter { it.url !in seen })
-            next = p.next
+            // Keep asking until a page brings something new (pages can repeat what's shown).
+            var step: (suspend () -> Paged)? = n
+            var tries = 0
+            while (step != null && tries < 4) {
+                val p = withContext(Dispatchers.IO) { step!!() }
+                val seen = items.map { it.url }.toHashSet()
+                val fresh = p.items.filter { it.url !in seen }
+                items.addAll(fresh)
+                step = p.next
+                next = step
+                tries++
+                if (fresh.isNotEmpty()) break
+            }
         } catch (t: Throwable) {
-            next = null
+            // Keep [next] so it can be tried again.
+            moreFailed = true
         } finally {
             loading = false
         }
@@ -498,6 +512,8 @@ fun PagedColumn(
     /** Shows saved items instantly while fresh ones load (e.g. Home from last time). */
     cached: (() -> List<Item>)? = null,
     onLoaded: ((List<Item>) -> Unit)? = null,
+    /** Extra work when you pull down to refresh. */
+    onRefresh: (suspend () -> Unit)? = null,
     header: LazyListScope.() -> Unit = {},
 ) {
     val k = key.toString()
@@ -513,6 +529,7 @@ fun PagedColumn(
                 val p = withContext(Dispatchers.IO) { load() }
                 list.set(p)
                 onLoaded?.invoke(p.items)
+                if (pull) state.scrollToItem(0)
             } catch (t: Throwable) {
                 if (list.items.isEmpty()) list.error = friendlyError(t)
             } finally {
@@ -542,13 +559,16 @@ fun PagedColumn(
             last >= state.layoutInfo.totalItemsCount - 5
         }
     }
-    LaunchedEffect(nearEnd, list.items.size) {
-        if (nearEnd && list.next != null && !list.loading) list.loadMore()
+    LaunchedEffect(nearEnd, list.items.size, list.loading, list.moreFailed) {
+        if (nearEnd && list.next != null && !list.loading && !list.refreshing && !list.moreFailed) list.loadMore()
     }
 
     androidx.compose.material3.pulltorefresh.PullToRefreshBox(
         isRefreshing = list.refreshing,
-        onRefresh = { reload(pull = true) },
+        onRefresh = {
+            reload(pull = true)
+            onRefresh?.let { r -> scope.launch { r() } }
+        },
         modifier = Modifier.fillMaxSize(),
     ) {
         LazyColumn(state = state, contentPadding = PaddingValues(bottom = 90.dp), modifier = Modifier.fillMaxSize()) {
@@ -590,6 +610,13 @@ fun PagedColumn(
                 }
             }
             if (list.loading && list.items.isNotEmpty()) item { Loading() }
+            if (list.moreFailed && list.items.isNotEmpty()) item {
+                Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                    androidx.compose.material3.OutlinedButton(onClick = { scope.launch { list.loadMore() } }) {
+                        Text("Couldn't load more · Retry")
+                    }
+                }
+            }
         }
     }
 }
