@@ -243,7 +243,9 @@ fun VideoScreen(video: Video, nav: Nav, onFullscreen: () -> Unit) {
         }
         var showComments by remember(video.url) { mutableStateOf(false) }
 
-        LazyColumn(contentPadding = PaddingValues(bottom = 24.dp), modifier = Modifier.fillMaxSize()) {
+        // Comments open under the video, in place of the details, so the video stays in view.
+        if (showComments) CommentsPanel(video.url, { showComments = false }, Modifier.fillMaxSize())
+        else LazyColumn(contentPadding = PaddingValues(bottom = 24.dp), modifier = Modifier.fillMaxSize()) {
             item { Details(video, i, nav) }
             item { CommentsPreview(video.url) { showComments = true } }
             item {
@@ -261,7 +263,6 @@ fun VideoScreen(video: Video, nav: Nav, onFullscreen: () -> Unit) {
             if ((i == null && loading) || (filter == "channel" && fromChannel == null)) item { SkeletonCards(2) }
             items(shown.orEmpty(), key = { "r-$filter-" + it.url }, contentType = { it::class }) { ItemView(it, nav, bigVideos = true) }
         }
-        if (showComments) CommentsSheet(video.url) { showComments = false }
     }
     }
 }

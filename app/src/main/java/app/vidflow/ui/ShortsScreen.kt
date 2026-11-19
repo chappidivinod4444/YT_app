@@ -135,6 +135,7 @@ fun ShortsScreen(
         onDispose { if (PlayerHolder.current.value?.short == true) PlayerHolder.stop() }
     }
 
+    var commentsFor by remember(key) { mutableStateOf<String?>(null) }
     Box(
         Modifier
             .fillMaxSize()
@@ -167,14 +168,21 @@ fun ShortsScreen(
                 VerticalPager(
                     state = pager,
                     beyondViewportPageCount = 1,
+                    // No swiping to the next short while comments are open.
+                    userScrollEnabled = commentsFor == null,
                     key = { videos.getOrNull(it)?.url ?: it },
                     modifier = Modifier.fillMaxSize(),
                 ) { page ->
-                    ShortPage(videos[page], active = page == pager.settledPage, nav = nav)
+                    val v = videos[page]
+                    ShortPage(
+                        v, active = page == pager.settledPage, nav = nav,
+                        commentsOpen = commentsFor == v.url,
+                        setComments = { open -> commentsFor = if (open) v.url else null },
+                    )
                 }
             }
         }
-        Row(
+        if (commentsFor == null) Row(
             Modifier
                 .fillMaxWidth()
                 .background(Brush.verticalGradient(listOf(Color(0x99000000), Color.Transparent)))
@@ -210,7 +218,7 @@ private fun ShortsSkeleton() {
 }
 
 @Composable
-private fun ShortPage(v: Video, active: Boolean, nav: Nav) {
+private fun ShortPage(v: Video, active: Boolean, nav: Nav, commentsOpen: Boolean, setComments: (Boolean) -> Unit) {
     val context = LocalContext.current
     val current by PlayerHolder.current.collectAsState()
     val playError by PlayerHolder.error.collectAsState()
@@ -250,10 +258,15 @@ private fun ShortPage(v: Video, active: Boolean, nav: Nav) {
         }
     }
 
+    // With comments open the video shrinks to the top and the comments fill the rest (like YouTube).
+    val videoWeight by androidx.compose.animation.core.animateFloatAsState(if (commentsOpen) 0.36f else 1f, label = "video")
+    Column(Modifier.fillMaxSize()) {
     Box(
         Modifier
-            .fillMaxSize()
+            .fillMaxWidth()
+            .weight(videoWeight)
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                if (commentsOpen) return@clickable setComments(false)
                 if (!playingThis) return@clickable
                 val p = PlayerHolder.player
                 if (p.isPlaying) p.pause() else p.play()
@@ -285,10 +298,8 @@ private fun ShortPage(v: Video, active: Boolean, nav: Nav) {
 
         val channelUrl = info?.uploaderUrl ?: v.channelUrl
         val subscribed = remember(subs, channelUrl) { Library.isSubscribed(channelUrl) }
-        var showComments by remember(v.url) { mutableStateOf(false) }
         var showSave by remember(v.url) { mutableStateOf(false) }
         var showDownload by remember(v.url) { mutableStateOf(false) }
-        if (showComments) CommentsSheet(v.url) { showComments = false }
         if (showSave) SaveToPlaylistDialog(v) { showSave = false }
         if (showDownload) DownloadDialog(v, listOf(1080, 720, 480)) { showDownload = false }
 
@@ -299,7 +310,7 @@ private fun ShortPage(v: Video, active: Boolean, nav: Nav) {
         LaunchedEffect(active, v.url) { if (active && comments < 0) comments = commentCount(v.url) }
 
         // Bottom: actions column on the right, channel and title on the left (like YouTube).
-        Row(
+        if (!commentsOpen) Row(
             Modifier
                 .align(Alignment.BottomStart)
                 .fillMaxWidth()
@@ -363,7 +374,7 @@ private fun ShortPage(v: Video, active: Boolean, nav: Nav) {
                     if (likes >= 0) formatCount(likes + if (liked) 1 else 0) else "Like",
                     tint = if (liked) Color(0xFFFF3B5C) else Color.White,
                 ) { app.vidflow.core.Saved.toggleLike(v) }
-                SideAction(Icons.Outlined.Comment, if (comments >= 0) formatCount(comments) else "Comments") { showComments = true }
+                SideAction(Icons.Outlined.Comment, if (comments >= 0) formatCount(comments) else "Comments") { setComments(true) }
                 SideAction(Icons.Outlined.BookmarkBorder, "Save") { showSave = true }
                 SideAction(Icons.Outlined.Reply, "Share", mirror = true) {
                     context.startActivity(
@@ -385,7 +396,7 @@ private fun ShortPage(v: Video, active: Boolean, nav: Nav) {
             }
         }
 
-        if (playingThis) {
+        if (playingThis && !commentsOpen) {
             LinearProgressIndicator(
                 progress = { progress },
                 color = Color.White,
@@ -393,6 +404,10 @@ private fun ShortPage(v: Video, active: Boolean, nav: Nav) {
                 modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(2.dp),
             )
         }
+    }
+    if (commentsOpen) {
+        CommentsPanel(v.url, { setComments(false) }, Modifier.fillMaxWidth().weight(1f - 0.36f))
+    }
     }
 }
 

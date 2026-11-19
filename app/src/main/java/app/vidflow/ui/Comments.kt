@@ -38,6 +38,7 @@ import app.vidflow.core.GoogleAccount
 import app.vidflow.core.Yt
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.size
@@ -114,9 +115,13 @@ fun CommentsPreview(url: String, onOpen: () -> Unit) {
 /** Number of comments for the Shorts button, from the shared first page. */
 suspend fun commentCount(url: String): Long = runCatching { firstPage(url).count }.getOrDefault(-1L)
 
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * Comments as a panel that sits under the video (like YouTube), so the video stays visible.
+ * Back closes it.
+ */
 @Composable
-fun CommentsSheet(url: String, onClose: () -> Unit) {
+fun CommentsPanel(url: String, onClose: () -> Unit, modifier: Modifier = Modifier) {
+    androidx.activity.compose.BackHandler(onBack = onClose)
     var sort by remember(url) { mutableStateOf("top") }
     val comments = remember(url, sort) { mutableStateListOf<Yt.Comment>() }
     var next by remember(url, sort) { mutableStateOf<(suspend () -> Yt.CommentPage)?>(null) }
@@ -237,14 +242,18 @@ fun CommentsSheet(url: String, onClose: () -> Unit) {
         }
     }
 
-    ModalBottomSheet(
-        onDismissRequest = onClose,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = Color(0xFF0F0F0F),
-        contentColor = Color.White,
-        dragHandle = { androidx.compose.material3.BottomSheetDefaults.DragHandle(color = Color(0x66FFFFFF)) },
-    ) {
-        Column(Modifier.fillMaxHeight(0.92f).imePadding()) {
+    androidx.compose.runtime.CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides Color.White) {
+        Column(
+            modifier
+                .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+                .background(Color(0xFF0F0F0F))
+                // Swallow taps so they don't reach the video underneath.
+                .clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null) {}
+                .imePadding()
+        ) {
+            Box(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.width(36.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(Color(0x66FFFFFF)))
+            }
             // Header: title, count, close.
             Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Comments", fontSize = 20.sp, fontWeight = FontWeight.Bold)
@@ -323,7 +332,7 @@ fun CommentsSheet(url: String, onClose: () -> Unit) {
                 }
             }
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp).navigationBarsPadding(),
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (signedIn) {
