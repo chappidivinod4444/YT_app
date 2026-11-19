@@ -65,26 +65,73 @@ object GoogleAccount {
     private lateinit var app: Context
     private val http = OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
 
+    /** Accounts you've signed in with, so you can switch between them. */
+    data class Saved(val email: String, val name: String, val avatar: String?, val handle: String?, val channelId: String?)
+
+    val accounts = MutableStateFlow<List<Saved>>(emptyList())
+    val email = MutableStateFlow<String?>(null)
+    val handle = MutableStateFlow<String?>(null)
+    val channelId = MutableStateFlow<String?>(null)
+
     fun init(context: Context) {
         app = context.applicationContext
         val p = prefs()
         signedIn.value = p.getBoolean("signedIn", false)
         name.value = p.getString("name", null)
         avatar.value = p.getString("avatar", null)
+        email.value = p.getString("email", null)
+        handle.value = p.getString("handle", null)
+        channelId.value = p.getString("channelId", null)
+        accounts.value = try {
+            val arr = org.json.JSONArray(app.getSharedPreferences("accounts", Context.MODE_PRIVATE).getString("list", "[]"))
+            (0 until arr.length()).map { i ->
+                val o = arr.getJSONObject(i)
+                Saved(
+                    o.getString("email"), o.optString("name"), o.optString("avatar").ifEmpty { null },
+                    o.optString("handle").ifEmpty { null }, o.optString("channelId").ifEmpty { null },
+                )
+            }
+        } catch (_: Throwable) {
+            emptyList()
+        }
+    }
+
+    private fun saveAccounts() {
+        val arr = org.json.JSONArray()
+        accounts.value.forEach {
+            arr.put(JSONObject().put("email", it.email).put("name", it.name).put("avatar", it.avatar ?: "")
+                .put("handle", it.handle ?: "").put("channelId", it.channelId ?: ""))
+        }
+        app.getSharedPreferences("accounts", Context.MODE_PRIVATE).edit().putString("list", arr.toString()).apply()
+    }
+
+    fun forget(mail: String) {
+        accounts.value = accounts.value.filterNot { it.email == mail }
+        saveAccounts()
     }
 
     private fun prefs() = app.getSharedPreferences("account", Context.MODE_PRIVATE)
 
     /** Called after Google gives a token. Blocking: run on Dispatchers.IO. */
-    fun onToken(t: String) {
+    fun onToken(t: String, accountEmail: String? = null) {
         token = t
-        val me = get("channels?part=snippet&mine=true").optJSONArray("items")?.optJSONObject(0)?.optJSONObject("snippet")
+        val item = get("channels?part=snippet&mine=true").optJSONArray("items")?.optJSONObject(0)
+        val me = item?.optJSONObject("snippet")
         val n = me?.optString("title")?.takeIf { it.isNotBlank() } ?: "Google account"
         val a = me?.optJSONObject("thumbnails")?.let { thumb(it) }
+        val h = me?.optString("customUrl")?.takeIf { it.isNotBlank() }?.let { if (it.startsWith("@")) it else "@$it" }
+        val id = item?.optString("id")?.takeIf { it.isNotBlank() }
+        val mail = accountEmail ?: email.value ?: n
         name.value = n
         avatar.value = a
+        handle.value = h
+        channelId.value = id
+        email.value = mail
         signedIn.value = true
-        prefs().edit().putBoolean("signedIn", true).putString("name", n).putString("avatar", a).apply()
+        prefs().edit().putBoolean("signedIn", true).putString("name", n).putString("avatar", a)
+            .putString("email", mail).putString("handle", h).putString("channelId", id).apply()
+        accounts.value = listOf(Saved(mail, n, a, h, id)) + accounts.value.filterNot { it.email == mail }
+        saveAccounts()
     }
 
     /** Blocking. */
@@ -94,6 +141,9 @@ object GoogleAccount {
         signedIn.value = false
         name.value = null
         avatar.value = null
+        handle.value = null
+        channelId.value = null
+        email.value = null
         prefs().edit().clear().apply()
         if (t != null) {
             try {

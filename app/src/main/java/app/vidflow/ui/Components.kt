@@ -492,6 +492,9 @@ fun PagedColumn(
     bigVideos: Boolean = true,
     /** Shown after the 3rd item (e.g. a Shorts shelf). */
     insert: (@Composable () -> Unit)? = null,
+    /** Shown every [repeatEvery] items; gets the shelf number (0, 1, 2...). */
+    repeatInsert: (@Composable (Int) -> Unit)? = null,
+    repeatEvery: Int = 8,
     /** Shows saved items instantly while fresh ones load (e.g. Home from last time). */
     cached: (() -> List<Item>)? = null,
     onLoaded: ((List<Item>) -> Unit)? = null,
@@ -563,11 +566,28 @@ fun PagedColumn(
                     )
                 }
             }
-            val split = if (insert != null) minOf(3, list.items.size) else list.items.size
-            items(list.items.subList(0, split), key = { it.url }, contentType = { it::class }) { ItemView(it, nav, bigVideos) }
-            if (insert != null && list.items.isNotEmpty()) item(key = "insert", contentType = "insert") { insert() }
-            if (split < list.items.size) {
-                items(list.items.subList(split, list.items.size), key = { it.url }, contentType = { it::class }) { ItemView(it, nav, bigVideos) }
+            if (repeatInsert != null) {
+                // Videos in groups, with a shelf after the 3rd and then every [repeatEvery].
+                val all = list.items.toList()
+                var start = 0
+                var shelf = 0
+                while (start < all.size) {
+                    val end = minOf(all.size, if (shelf == 0) 3 else start + repeatEvery)
+                    items(all.subList(start, end), key = { it.url }, contentType = { it::class }) { ItemView(it, nav, bigVideos) }
+                    if (end - start == (if (shelf == 0) 3 else repeatEvery)) {
+                        val n = shelf
+                        item(key = "shelf-$n", contentType = "shelf") { repeatInsert(n) }
+                    }
+                    start = end
+                    shelf++
+                }
+            } else {
+                val split = if (insert != null) minOf(3, list.items.size) else list.items.size
+                items(list.items.subList(0, split), key = { it.url }, contentType = { it::class }) { ItemView(it, nav, bigVideos) }
+                if (insert != null && list.items.isNotEmpty()) item(key = "insert", contentType = "insert") { insert() }
+                if (split < list.items.size) {
+                    items(list.items.subList(split, list.items.size), key = { it.url }, contentType = { it::class }) { ItemView(it, nav, bigVideos) }
+                }
             }
             if (list.loading && list.items.isNotEmpty()) item { Loading() }
         }

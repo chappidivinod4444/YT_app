@@ -25,6 +25,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -161,6 +164,13 @@ fun ShortsScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text("Shorts", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp, modifier = Modifier.weight(1f))
+            var muted by remember { mutableStateOf(PlayerHolder.player.volume == 0f) }
+            IconButton(onClick = { muted = !muted; PlayerHolder.player.volume = if (muted) 0f else 1f }) {
+                Text(if (muted) "\uD83D\uDD07" else "\uD83D\uDD0A", fontSize = 20.sp)
+            }
+            IconButton(onClick = nav.search) {
+                Icon(androidx.compose.material.icons.Icons.Filled.Search, contentDescription = "Search", tint = Color.White)
+            }
             IconButton(onClick = { generation++ }) {
                 Icon(Icons.Filled.Refresh, contentDescription = "New shorts", tint = Color.White)
             }
@@ -254,6 +264,12 @@ private fun ShortPage(v: Video, active: Boolean, nav: Nav) {
 
         val channelUrl = info?.uploaderUrl ?: v.channelUrl
         val subscribed = remember(subs, channelUrl) { Library.isSubscribed(channelUrl) }
+        var showComments by remember(v.url) { mutableStateOf(false) }
+        var showSave by remember(v.url) { mutableStateOf(false) }
+        var showDownload by remember(v.url) { mutableStateOf(false) }
+        if (showComments) CommentsSheet(v.url) { showComments = false }
+        if (showSave) SaveToPlaylistDialog(v) { showSave = false }
+        if (showDownload) DownloadDialog(v, listOf(1080, 720, 480)) { showDownload = false }
 
         // Actions on the right side.
         Column(
@@ -264,7 +280,23 @@ private fun ShortPage(v: Video, active: Boolean, nav: Nav) {
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
             val likes = info?.likeCount ?: -1
-            SideAction("♥", if (likes >= 0) formatCount(likes) else "Like") {}
+            val likedList by app.vidflow.core.Saved.liked.collectAsState()
+            val liked = likedList.any { it.url == v.url }
+            SideAction(
+                null,
+                if (likes >= 0) formatCount(likes + if (liked) 1 else 0) else "Like",
+                icon = {
+                    Icon(
+                        if (liked) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                        contentDescription = "Like",
+                        tint = if (liked) MaterialTheme.colorScheme.primary else Color.White,
+                        modifier = Modifier.size(28.dp),
+                    )
+                },
+            ) { app.vidflow.core.Saved.toggleLike(v) }
+            SideAction("\uD83D\uDCAC", "Comments") { showComments = true }
+            SideAction("\u2795", "Save") { showSave = true }
+            SideAction("\u2B07", "Download") { showDownload = true }
             SideAction(null, "Share", icon = { Icon(Icons.Filled.Share, contentDescription = null, tint = Color.White) }) {
                 context.startActivity(
                     Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, v.url), "Share")
@@ -335,12 +367,12 @@ private fun ShortPage(v: Video, active: Boolean, nav: Nav) {
 @Composable
 private fun SideAction(glyph: String?, label: String, icon: (@Composable () -> Unit)? = null, onClick: () -> Unit) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable(onClick = onClick)) {
-        Box(
-            Modifier.size(46.dp).background(Color(0x40000000), CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (icon != null) icon() else Text(glyph ?: "", color = Color.White, fontSize = 22.sp)
+        Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+            if (icon != null) icon() else Text(glyph ?: "", color = Color.White, fontSize = 24.sp)
         }
-        Text(label, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+        Text(
+            label, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+            style = androidx.compose.ui.text.TextStyle(shadow = androidx.compose.ui.graphics.Shadow(Color.Black, blurRadius = 6f)),
+        )
     }
 }

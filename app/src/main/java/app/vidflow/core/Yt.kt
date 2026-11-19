@@ -236,7 +236,60 @@ object Yt {
             i++
         }
         val items = mixed.distinctBy { it.url }.filter { it.url !in watched }
-        return Paged(items, popular?.next)
+        val shown = java.util.Collections.synchronizedSet(HashSet<String>(items.map { it.url } + watched))
+        return Paged(items, moreRecommended(items.shuffled().take(12).toMutableList(), shown, popular?.next, 1))
+    }
+
+    /**
+     * Endless Home: every page grows from videos already shown (their related videos),
+     * mixed with one of your topic chips and more popular videos.
+     */
+    private fun moreRecommended(
+        seeds: MutableList<Video>,
+        shown: MutableSet<String>,
+        popularNext: (suspend () -> Paged)?,
+        round: Int,
+    ): suspend () -> Paged = {
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(4)
+        val picked = generateSequence { if (seeds.isEmpty()) null else seeds.removeAt(seeds.indices.random()) }.take(4).toList()
+        val lists = try {
+            val related = picked.map { v ->
+                pool.submit<List<Video>> {
+                    runCatching { related(stream(v.url)).filterIsInstance<Video>().filter { !it.short } }.getOrDefault(emptyList())
+                }
+            }
+            val topic = Topics.list.value.randomOrNull()?.let { t ->
+                pool.submit<List<Video>> {
+                    runCatching { topic(t).items.filterIsInstance<Video>() }.getOrDefault(emptyList())
+                }
+            }
+            related.map { runCatching { it.get() }.getOrDefault(emptyList()).shuffled().take(8) } +
+                listOfNotNull(topic?.let { runCatching { it.get() }.getOrDefault(emptyList()).shuffled().take(8) })
+        } finally {
+            pool.shutdown()
+        }
+        var nextPopular = popularNext
+        val popular = try {
+            nextPopular?.invoke()?.also { nextPopular = it.next }?.items?.filterIsInstance<Video>().orEmpty()
+        } catch (_: Throwable) {
+            nextPopular = null
+            emptyList()
+        }
+        val sources = (lists + listOf(popular)).map { it.toMutableList() }.filter { it.isNotEmpty() }
+        val out = ArrayList<Video>()
+        var i = 0
+        while (sources.any { it.isNotEmpty() }) {
+            val l = sources[i % sources.size]
+            if (l.isNotEmpty()) {
+                val v = l.removeAt(0)
+                if (shown.add(v.url)) out.add(v)
+            }
+            i++
+        }
+        // New videos become seeds for later pages, so it never runs dry.
+        seeds.addAll(out.shuffled().take(8))
+        if (seeds.isEmpty()) Library.history.value.take(10).forEach { seeds.add(it.video) }
+        Paged(out, if (round < 200) moreRecommended(seeds, shown, nextPopular, round + 1) else null)
     }
 
     /** Videos for a topic chip like "Music" or "Telugu cinema". */

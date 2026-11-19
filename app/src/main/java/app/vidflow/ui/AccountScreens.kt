@@ -50,12 +50,31 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** Asks Google for a read-only token. Shows Google's own screen the first time. */
-class GoogleSignIn(private val activity: Activity, private val launchUi: (IntentSenderRequest) -> Unit) {
+class GoogleSignIn(
+    private val activity: Activity,
+    private val launchUi: (IntentSenderRequest) -> Unit,
+    private val launchPicker: (android.content.Intent) -> Unit,
+) {
     var onToken: (String) -> Unit = {}
     var onError: (String) -> Unit = {}
 
-    fun request() {
-        val req = AuthorizationRequest.builder().setRequestedScopes(listOf(Scope(GoogleAccount.SCOPE))).build()
+    /** The account being signed in, if one was picked. */
+    var pickedEmail: String? = null
+
+    /** Shows the phone's own list of Google accounts to choose from. */
+    fun pickAccount() {
+        launchPicker(
+            android.accounts.AccountManager.newChooseAccountIntent(
+                null, null, arrayOf("com.google"), null, null, null, null,
+            )
+        )
+    }
+
+    fun request(email: String? = null) {
+        if (email != null) pickedEmail = email
+        val builder = AuthorizationRequest.builder().setRequestedScopes(listOf(Scope(GoogleAccount.SCOPE)))
+        pickedEmail?.let { builder.setAccount(android.accounts.Account(it, "com.google")) }
+        val req = builder.build()
         Identity.getAuthorizationClient(activity).authorize(req)
             .addOnSuccessListener { r ->
                 val pi = r.pendingIntent
@@ -88,7 +107,11 @@ fun rememberGoogleSignIn(): GoogleSignIn {
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { res ->
         holder?.handleResult(res.data)
     }
-    val g = remember { GoogleSignIn(activity) { launcher.launch(it) } }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
+        val mail = res.data?.getStringExtra(android.accounts.AccountManager.KEY_ACCOUNT_NAME)
+        if (mail != null) holder?.request(mail) else holder?.onError?.invoke("No account chosen.")
+    }
+    val g = remember { GoogleSignIn(activity, { launcher.launch(it) }, { picker.launch(it) }) }
     holder = g
     return g
 }
@@ -110,7 +133,7 @@ fun AccountSection(nav: Nav, openLiked: () -> Unit, openPlaylists: () -> Unit, s
         scope.launch {
             busy = true
             try {
-                withContext(Dispatchers.IO) { GoogleAccount.onToken(t) }
+                withContext(Dispatchers.IO) { GoogleAccount.onToken(t, google.pickedEmail) }
                 after?.invoke()
             } catch (e: Throwable) {
                 say(e.message ?: friendlyError(e))
@@ -189,7 +212,7 @@ fun AccountSection(nav: Nav, openLiked: () -> Unit, openPlaylists: () -> Unit, s
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Button(enabled = !busy, onClick = { busy = true; google.request() }, modifier = Modifier.fillMaxWidth()) {
+            Button(enabled = !busy, onClick = { google.pickAccount() }, modifier = Modifier.fillMaxWidth()) {
                 Text(if (busy) "Opening Google…" else "Sign in with Google")
             }
             TextButton(onClick = { help = true }) { Text("First time? Setup steps") }

@@ -114,6 +114,8 @@ sealed interface Screen {
     data object LocalLiked : Screen
     data class LocalList(val id: String) : Screen
     data object GoogleSetup : Screen
+    data object SettingsPage : Screen
+    data object HistoryPage : Screen
     data object Shorts : Screen
     data class ShortsFrom(val list: List<Video>, val index: Int) : Screen
     data object Liked : Screen
@@ -338,15 +340,23 @@ private fun Root(activity: MainActivity) {
                     Screen.Subscriptions -> app.vidflow.ui.SubscriptionsScreen(nav)
                     Screen.Explore -> app.vidflow.ui.ExploreScreen(nav)
                     Screen.NotificationsList -> app.vidflow.ui.NotificationsScreen(nav)
-                    Screen.Library -> LibraryScreen(
-                        nav,
-                        openLiked = { push(Screen.Liked) },
-                        openPlaylists = { push(Screen.MyPlaylists) },
-                        say = say,
+                    Screen.Library -> app.vidflow.ui.YouScreen(
+                        nav, say,
+                        openSettings = { push(Screen.SettingsPage) },
+                        openNotifications = { push(Screen.NotificationsList) },
+                        openHistory = { push(Screen.HistoryPage) },
                         openLocalLiked = { push(Screen.LocalLiked) },
                         openLocalPlaylist = { push(Screen.LocalList(it)) },
-                        openSetup = { push(Screen.GoogleSetup) },
+                        openGoogleLiked = { push(Screen.Liked) },
+                        openGooglePlaylists = { push(Screen.MyPlaylists) },
                     )
+                    Screen.SettingsPage -> app.vidflow.ui.SettingsScreen(
+                        nav, say,
+                        openSetup = { push(Screen.GoogleSetup) },
+                        openLiked = { push(Screen.Liked) },
+                        openPlaylists = { push(Screen.MyPlaylists) },
+                    )
+                    Screen.HistoryPage -> app.vidflow.ui.HistoryScreen(nav)
                     Screen.LocalLiked -> {
                         val liked by app.vidflow.core.Saved.liked.collectAsState()
                         app.vidflow.ui.LocalListScreen("Liked videos", liked, nav, onRemove = { app.vidflow.core.Saved.toggleLike(it) }, onDeleteList = null)

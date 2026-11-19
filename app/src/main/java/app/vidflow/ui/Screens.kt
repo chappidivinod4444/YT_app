@@ -143,16 +143,9 @@ fun HomeScreen(nav: Nav, openExplore: () -> Unit, openNotifications: () -> Unit)
     var tab by rememberSaveable { mutableStateOf("All") }
     var editTopics by remember { mutableStateOf(false) }
 
-    // Shorts for the grid on Home, kept between visits.
-    var shelf by remember { mutableStateOf(HomeShorts.items) }
+    // Shorts for the grids on Home: a fresh set of 4 for each grid, kept between visits.
     LaunchedEffect(Unit) {
-        if (shelf.isEmpty()) {
-            shelf = withContext(Dispatchers.IO) {
-                runCatching { Yt.shortsFeed(Library.subscriptions.value.map { it.url }).items.filterIsInstance<Video>().take(4) }
-                    .getOrDefault(emptyList())
-            }
-            HomeShorts.items = shelf
-        }
+        HomeShorts.ensure(1)
         // Keep the subscriptions feed fresh in the background for the bell and Home.
         if (Feed.videos.value == null || Feed.stale()) withContext(Dispatchers.IO) { runCatching { Feed.refresh() } }
     }
@@ -198,7 +191,11 @@ fun HomeScreen(nav: Nav, openExplore: () -> Unit, openNotifications: () -> Unit)
     if (tab == "All") {
         PagedColumn(
             key = "home-all", nav = nav, load = { Yt.recommended() }, header = header,
-            insert = { ShortsGrid(shelf, nav) },
+            repeatInsert = { n ->
+                LaunchedEffect(n) { HomeShorts.ensure(n + 2) }
+                val pool by HomeShorts.pool.collectAsState()
+                ShortsGrid(pool.drop(n * 4).take(4), nav)
+            },
             cached = { app.vidflow.core.HomeCache.load() },
             onLoaded = { app.vidflow.core.HomeCache.save(it) },
         )
@@ -210,9 +207,28 @@ fun HomeScreen(nav: Nav, openExplore: () -> Unit, openNotifications: () -> Unit)
     if (editTopics) TopicEditor(topics) { editTopics = false }
 }
 
-/** Remembered between visits to Home. */
+/** A growing pool of shorts for the grids on Home, remembered between visits. */
 object HomeShorts {
-    var items: List<Video> = emptyList()
+    val pool = kotlinx.coroutines.flow.MutableStateFlow<List<Video>>(emptyList())
+    private var next: (suspend () -> Paged)? = null
+    private var loading = false
+
+    /** Makes sure there are enough shorts for [grids] grids. */
+    suspend fun ensure(grids: Int) {
+        if (loading || pool.value.size >= grids * 4) return
+        loading = true
+        try {
+            withContext(Dispatchers.IO) {
+                val page = next?.invoke() ?: Yt.shortsFeed(Library.subscriptions.value.map { it.url })
+                next = page.next
+                val seen = pool.value.map { it.url }.toHashSet()
+                pool.value = pool.value + page.items.filterIsInstance<Video>().filter { it.url !in seen }
+            }
+        } catch (_: Throwable) {
+        } finally {
+            loading = false
+        }
+    }
 }
 
 @Composable
