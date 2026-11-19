@@ -289,7 +289,7 @@ private fun ShortPage(v: Video, active: Boolean, nav: Nav, commentsOpen: Boolean
             )
             active && !playingThis -> CircularProgressIndicator(color = Color.White, strokeWidth = 3.dp, modifier = Modifier.align(Alignment.Center).size(40.dp))
         }
-        AnimatedVisibility(paused, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.Center)) {
+        if (paused) Box(Modifier.align(Alignment.Center)) {
             Box(
                 Modifier.size(72.dp).background(Color(0x66000000), CircleShape),
                 contentAlignment = Alignment.Center,
