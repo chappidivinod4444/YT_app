@@ -225,7 +225,7 @@ object GoogleAccount {
         }
     }
 
-    private fun commentFrom(s: JSONObject, id: String?, replies: Int = 0) = app.vidflow.core.Yt.Comment(
+    private fun commentFrom(s: JSONObject, id: String?, replies: Int = 0) = Yt.Comment(
         id = id,
         author = s.optString("authorDisplayName"),
         authorUrl = s.optString("authorChannelUrl").ifEmpty { null },
@@ -242,7 +242,7 @@ object GoogleAccount {
     )
 
     /** Posts a new comment on a video. Blocking. */
-    fun postComment(videoId: String, text: String): app.vidflow.core.Yt.Comment {
+    fun postComment(videoId: String, text: String): Yt.Comment {
         val body = JSONObject().put(
             "snippet", JSONObject().put("videoId", videoId)
                 .put("topLevelComment", JSONObject().put("snippet", JSONObject().put("textOriginal", text)))
@@ -253,14 +253,14 @@ object GoogleAccount {
     }
 
     /** Replies to a comment. Blocking. */
-    fun reply(parentId: String, text: String): app.vidflow.core.Yt.Comment {
+    fun reply(parentId: String, text: String): Yt.Comment {
         val body = JSONObject().put("snippet", JSONObject().put("parentId", parentId).put("textOriginal", text))
         val r = send("comments?part=snippet", body)
         return commentFrom(r.getJSONObject("snippet"), r.optString("id"))
     }
 
     /** Newest comments first (needs sign-in). Blocking. */
-    fun newestComments(videoId: String, pageToken: String? = null): Pair<List<app.vidflow.core.Yt.Comment>, String?> {
+    fun newestComments(videoId: String, pageToken: String? = null): Pair<List<Yt.Comment>, String?> {
         val o = get("commentThreads?part=snippet&order=time&maxResults=30&textFormat=html&videoId=$videoId" + (pageToken?.let { "&pageToken=$it" } ?: ""))
         val items = o.optJSONArray("items") ?: org.json.JSONArray()
         val list = (0 until items.length()).map { i ->
