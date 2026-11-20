@@ -189,12 +189,12 @@ object GoogleAccount {
         }
     }
 
-    private fun send(path: String, body: JSONObject): JSONObject {
+    private fun send(path: String, body: JSONObject?, method: String = "POST"): JSONObject {
         val t = token ?: throw ApiException("Please sign in again.", needsSignIn = true)
         val req = okhttp3.Request.Builder()
             .url("https://www.googleapis.com/youtube/v3/$path")
             .header("Authorization", "Bearer $t")
-            .post(body.toString().toRequestBody("application/json".toMediaTypeOrNull()))
+            .method(method, body?.toString()?.toRequestBody("application/json".toMediaTypeOrNull()))
             .build()
         http.newCall(req).execute().use { r ->
             val text = r.body?.string().orEmpty()
@@ -221,8 +221,50 @@ object GoogleAccount {
                     needsSignIn = reason == "insufficientPermissions" || reason == "ACCESS_TOKEN_SCOPE_INSUFFICIENT",
                 )
             }
-            return JSONObject(text)
+            return if (text.isBlank()) JSONObject() else JSONObject(text)
         }
+    }
+
+    /** One of your playlists on YouTube. */
+    data class AccountList(val id: String, val title: String, val thumbnail: String?, val count: Long, val privacy: String)
+
+    /** Your YouTube playlists, newest first. Blocking. */
+    fun myPlaylists(): List<AccountList> = all("playlists?part=snippet,contentDetails,status&mine=true", max = 200).map { p ->
+        val sn = p.optJSONObject("snippet")
+        AccountList(
+            id = p.optString("id"),
+            title = sn?.optString("title").orEmpty(),
+            thumbnail = sn?.optJSONObject("thumbnails")?.let { thumb(it) },
+            count = p.optJSONObject("contentDetails")?.optLong("itemCount") ?: 0,
+            privacy = p.optJSONObject("status")?.optString("privacyStatus").orEmpty(),
+        )
+    }
+
+    /** The entry for [videoId] in a playlist, or null if it isn't there. Blocking. */
+    fun playlistItemId(playlistId: String, videoId: String): String? =
+        get("playlistItems?part=id&maxResults=1&playlistId=$playlistId&videoId=$videoId")
+            .optJSONArray("items")?.optJSONObject(0)?.optString("id")?.takeIf { it.isNotEmpty() }
+
+    /** Adds a video to one of your playlists; returns the new entry's id. Blocking. */
+    fun addToPlaylist(playlistId: String, videoId: String): String {
+        val body = JSONObject().put(
+            "snippet", JSONObject().put("playlistId", playlistId)
+                .put("resourceId", JSONObject().put("kind", "youtube#video").put("videoId", videoId))
+        )
+        return send("playlistItems?part=snippet", body).optString("id")
+    }
+
+    fun removeFromPlaylist(itemId: String) {
+        send("playlistItems?id=$itemId", null, method = "DELETE")
+    }
+
+    /** Makes a new playlist in your account. Blocking. */
+    fun createPlaylist(title: String, privacy: String): AccountList {
+        val body = JSONObject()
+            .put("snippet", JSONObject().put("title", title))
+            .put("status", JSONObject().put("privacyStatus", privacy))
+        val r = send("playlists?part=snippet,status", body)
+        return AccountList(r.optString("id"), title, null, 0, privacy)
     }
 
     private fun commentFrom(s: JSONObject, id: String?, replies: Int = 0) = Yt.Comment(

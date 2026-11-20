@@ -12,6 +12,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import app.vidflow.core.friendlyError
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -65,54 +72,125 @@ import coil3.compose.AsyncImage
 
 // ------------------------------------------------------------------ dialogs
 
-/** "Save to…" sheet, like YouTube's: tap a list to add or remove the video. */
+/**
+ * "Save to…" sheet, like YouTube's. Shows your YouTube account's playlists (adding or
+ * removing changes them in your account) plus Watch later and Saved Shorts, which YouTube
+ * doesn't let other apps change, so those are kept in this app.
+ */
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun SaveToPlaylistDialog(video: Video, shorts: Boolean = false, onClose: () -> Unit) {
     val lists by Saved.playlists.collectAsState()
+    val signedIn by app.vidflow.core.GoogleAccount.signedIn.collectAsState()
     val context = LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    fun toast(t: String) = android.widget.Toast.makeText(context, t, android.widget.Toast.LENGTH_SHORT).show()
+    val tokens = rememberTokenRunner { toast(it) }
+    val videoId = remember(video.url) { app.vidflow.core.Yt.videoId(video.url) }
     var creating by remember { mutableStateOf(false) }
-    // Saved Shorts only shows up when saving a short.
-    val shown = lists.filter { shorts || it.id != Saved.SAVED_SHORTS }
-        .sortedBy { if (it.id == Saved.WATCH_LATER) 0 else if (it.id == Saved.SAVED_SHORTS) 1 else 2 }
+
+    // Account playlists, and where this video sits in each (entry id, or null if not in it).
+    var account by remember { mutableStateOf<List<app.vidflow.core.GoogleAccount.AccountList>?>(null) }
+    val entries = remember { androidx.compose.runtime.mutableStateMapOf<String, String?>() }
+    val busy = remember { androidx.compose.runtime.mutableStateListOf<String>() }
+    var accountError by remember { mutableStateOf<String?>(null) }
+
+    fun loadAccount() {
+        if (!signedIn || videoId == null) return
+        tokens.run {
+            scope.launch {
+                try {
+                    val mine = withContext(Dispatchers.IO) { app.vidflow.core.GoogleAccount.myPlaylists() }
+                    account = mine
+                    // Check membership a few at a time so the sheet fills in quickly.
+                    mine.take(40).chunked(6).forEach { group ->
+                        group.map { p ->
+                            async(Dispatchers.IO) { p.id to runCatching { app.vidflow.core.GoogleAccount.playlistItemId(p.id, videoId) }.getOrNull() }
+                        }.forEach { d -> val (id, item) = d.await(); entries[id] = item }
+                    }
+                } catch (e: Throwable) {
+                    accountError = (e as? app.vidflow.core.GoogleAccount.ApiException)?.message ?: friendlyError(e)
+                    account = emptyList()
+                }
+            }
+        }
+    }
+    LaunchedEffect(signedIn) { loadAccount() }
+
+    fun toggleAccount(p: app.vidflow.core.GoogleAccount.AccountList) {
+        val vid = videoId ?: return
+        if (p.id in busy) return
+        busy.add(p.id)
+        tokens.run {
+            scope.launch {
+                try {
+                    val item = entries[p.id]
+                    if (item != null) {
+                        withContext(Dispatchers.IO) { app.vidflow.core.GoogleAccount.removeFromPlaylist(item) }
+                        entries[p.id] = null
+                        toast("Removed from ${p.title}")
+                    } else {
+                        val id = withContext(Dispatchers.IO) { app.vidflow.core.GoogleAccount.addToPlaylist(p.id, vid) }
+                        entries[p.id] = id
+                        toast("Saved to ${p.title}")
+                    }
+                } catch (e: Throwable) {
+                    toast((e as? app.vidflow.core.GoogleAccount.ApiException)?.message ?: friendlyError(e))
+                } finally {
+                    busy.remove(p.id)
+                }
+            }
+        }
+    }
+
+    val builtIn = lists.filter { it.id == Saved.WATCH_LATER || (shorts && it.id == Saved.SAVED_SHORTS) }
+        .sortedBy { if (it.id == Saved.WATCH_LATER) 0 else 1 }
+    val localOwn = lists.filter { it.id != Saved.WATCH_LATER && it.id != Saved.SAVED_SHORTS }
 
     androidx.compose.material3.ModalBottomSheet(
         onDismissRequest = onClose,
         containerColor = Color(0xFF212121),
         contentColor = Color.White,
     ) {
-        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 12.dp)) {
-            Text("Save to…", fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 24.dp, bottom = 12.dp))
-            Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
-                shown.forEach { p ->
+        Column(Modifier.fillMaxWidth().fillMaxHeight(0.85f).navigationBarsPadding().padding(bottom = 12.dp)) {
+            Text("Save to…", fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 24.dp, bottom = 8.dp))
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+                builtIn.forEach { p ->
                     val inside = p.videos.any { it.url == video.url }
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                if (inside) Saved.removeFrom(p.id, video.url) else Saved.addTo(p.id, video)
-                                android.widget.Toast.makeText(
-                                    context, if (inside) "Removed from ${p.name}" else "Saved to ${p.name}", android.widget.Toast.LENGTH_SHORT,
-                                ).show()
-                            }
-                            .padding(horizontal = 20.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        PlaylistStackThumb(p.videos.firstOrNull()?.thumbnail)
-                        Spacer(Modifier.width(16.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(p.name, fontSize = 17.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                            Text(
-                                "Private" + if (p.videos.isNotEmpty()) " · ${p.videos.size} video${if (p.videos.size == 1) "" else "s"}" else "",
-                                fontSize = 13.sp, color = Color(0xFFAAAAAA),
-                            )
+                    SaveRow(p.videos.firstOrNull()?.thumbnail, p.name, "Private · in this app", inside, loading = false) {
+                        if (inside) Saved.removeFrom(p.id, video.url) else Saved.addTo(p.id, video)
+                        toast(if (inside) "Removed from ${p.name}" else "Saved to ${p.name}")
+                    }
+                }
+                if (signedIn) {
+                    val acc = account
+                    when {
+                        acc == null -> Row(Modifier.fillMaxWidth().padding(24.dp), horizontalArrangement = Arrangement.Center) {
+                            androidx.compose.material3.CircularProgressIndicator(Modifier.size(24.dp), color = Color.White, strokeWidth = 2.dp)
                         }
-                        androidx.compose.material3.Icon(
-                            if (inside) androidx.compose.material.icons.Icons.Filled.Bookmark
-                            else androidx.compose.material.icons.Icons.Outlined.BookmarkBorder,
-                            contentDescription = if (inside) "Saved" else "Save",
-                            modifier = Modifier.size(28.dp),
-                        )
+                        accountError != null -> Text(accountError!!, color = Color(0xFFFF8A80), fontSize = 13.sp, modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
+                    }
+                    acc?.forEach { p ->
+                        val known = entries.containsKey(p.id)
+                        SaveRow(
+                            p.thumbnail, p.title,
+                            p.privacy.replaceFirstChar { it.uppercase() }.ifEmpty { "Private" } +
+                                if (p.count > 0) " · ${p.count} video${if (p.count == 1L) "" else "s"}" else "",
+                            inside = entries[p.id] != null,
+                            loading = !known || p.id in busy,
+                        ) { toggleAccount(p) }
+                    }
+                } else {
+                    Text(
+                        "Sign in with Google (You → Accounts) to see and save to your YouTube playlists.",
+                        color = Color(0xFFAAAAAA), fontSize = 13.sp, modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+                    )
+                }
+                localOwn.forEach { p ->
+                    val inside = p.videos.any { it.url == video.url }
+                    SaveRow(p.videos.firstOrNull()?.thumbnail, p.name, "Private · in this app", inside, loading = false) {
+                        if (inside) Saved.removeFrom(p.id, video.url) else Saved.addTo(p.id, video)
+                        toast(if (inside) "Removed from ${p.name}" else "Saved to ${p.name}")
                     }
                 }
             }
@@ -136,25 +214,91 @@ fun SaveToPlaylistDialog(video: Video, shorts: Boolean = false, onClose: () -> U
 
     if (creating) {
         var name by remember { mutableStateOf("") }
+        var privacy by remember { mutableStateOf("private") }
+        var saving by remember { mutableStateOf(false) }
         AlertDialog(
-            onDismissRequest = { creating = false },
+            onDismissRequest = { if (!saving) creating = false },
             title = { Text("New playlist") },
             text = {
-                OutlinedTextField(
-                    value = name, onValueChange = { name = it },
-                    placeholder = { Text("Choose a title") }, singleLine = true,
-                )
+                Column {
+                    OutlinedTextField(
+                        value = name, onValueChange = { name = it },
+                        placeholder = { Text("Choose a title") }, singleLine = true,
+                    )
+                    if (signedIn) {
+                        Text("Visibility", fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 14.dp, bottom = 6.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf("private" to "Private", "unlisted" to "Unlisted", "public" to "Public").forEach { (k, label) ->
+                                androidx.compose.material3.FilterChip(
+                                    selected = privacy == k, onClick = { privacy = k }, label = { Text(label) },
+                                )
+                            }
+                        }
+                        Text(
+                            "Made in your YouTube account.",
+                            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
+                }
             },
             confirmButton = {
-                TextButton(enabled = name.isNotBlank(), onClick = {
-                    val p = Saved.createPlaylist(name)
-                    Saved.addTo(p.id, video)
-                    android.widget.Toast.makeText(context, "Saved to ${p.name}", android.widget.Toast.LENGTH_SHORT).show()
-                    creating = false
-                }) { Text("Create") }
+                TextButton(enabled = name.isNotBlank() && !saving, onClick = {
+                    val title = name.trim()
+                    if (!signedIn || videoId == null) {
+                        val p = Saved.createPlaylist(title)
+                        Saved.addTo(p.id, video)
+                        toast("Saved to ${p.name}")
+                        creating = false
+                        return@TextButton
+                    }
+                    saving = true
+                    tokens.run {
+                        scope.launch {
+                            try {
+                                val made = withContext(Dispatchers.IO) { app.vidflow.core.GoogleAccount.createPlaylist(title, privacy) }
+                                val item = withContext(Dispatchers.IO) { app.vidflow.core.GoogleAccount.addToPlaylist(made.id, videoId) }
+                                account = listOf(made.copy(count = 1)) + account.orEmpty()
+                                entries[made.id] = item
+                                toast("Saved to ${made.title}")
+                                creating = false
+                            } catch (e: Throwable) {
+                                toast((e as? app.vidflow.core.GoogleAccount.ApiException)?.message ?: friendlyError(e))
+                            } finally {
+                                saving = false
+                            }
+                        }
+                    }
+                }) { Text(if (saving) "Creating…" else "Create") }
             },
             dismissButton = { TextButton(onClick = { creating = false }) { Text("Cancel") } },
         )
+    }
+}
+
+@Composable
+private fun SaveRow(thumb: String?, title: String, subtitle: String, inside: Boolean, loading: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(enabled = !loading, onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        PlaylistStackThumb(thumb)
+        Spacer(Modifier.width(16.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 17.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+            Text(subtitle, fontSize = 13.sp, color = Color(0xFFAAAAAA), maxLines = 1)
+        }
+        Box(Modifier.size(32.dp), contentAlignment = Alignment.Center) {
+            if (loading) androidx.compose.material3.CircularProgressIndicator(Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
+            else androidx.compose.material3.Icon(
+                if (inside) androidx.compose.material.icons.Icons.Filled.Bookmark
+                else androidx.compose.material.icons.Icons.Outlined.BookmarkBorder,
+                contentDescription = if (inside) "Saved" else "Save",
+                modifier = Modifier.size(28.dp),
+            )
+        }
     }
 }
 

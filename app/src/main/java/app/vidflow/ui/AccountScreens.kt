@@ -281,3 +281,38 @@ fun AccountListScreen(title: String, nav: Nav, load: () -> List<Item>, openPlayl
         }
     }
 }
+
+/**
+ * Runs Google-account work with a fresh token, asking Google first when needed
+ * (the token is never stored, so after the app restarts it's fetched again quietly).
+ */
+class TokenRunner(private val google: GoogleSignIn) {
+    internal var pending: (() -> Unit)? = null
+
+    fun run(action: () -> Unit) {
+        if (GoogleAccount.token != null) return action()
+        pending = action
+        val mail = GoogleAccount.email.value
+        if (mail != null && GoogleAccount.signedIn.value) google.request(mail) else google.pickAccount()
+    }
+}
+
+@Composable
+fun rememberTokenRunner(onError: (String) -> Unit): TokenRunner {
+    val scope = rememberCoroutineScope()
+    val google = rememberGoogleSignIn()
+    val runner = remember { TokenRunner(google) }
+    google.onToken = { t ->
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) { GoogleAccount.onToken(t, google.pickedEmail) }
+                runner.pending?.invoke()
+            } catch (e: Throwable) {
+                onError(e.message ?: friendlyError(e))
+            }
+            runner.pending = null
+        }
+    }
+    google.onError = { onError(it); runner.pending = null }
+    return runner
+}
