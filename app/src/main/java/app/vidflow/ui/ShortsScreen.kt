@@ -169,7 +169,7 @@ fun ShortsScreen(
                     // Load more well before the end, and pre-load the start of the next three
                     // so they begin playing the moment you swipe.
                     if (pager.currentPage >= videos.size - 5 && list.next != null) list.loadMore()
-                    for (k in 0..3) {
+                    for (k in 0..2) {
                         val v = videos.getOrNull(pager.currentPage + k) ?: break
                         launch(Dispatchers.IO) {
                             runCatching { PlayerHolder.prefetch(Yt.stream(v.url), SHORTS_HEIGHT) }

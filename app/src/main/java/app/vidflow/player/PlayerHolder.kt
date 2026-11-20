@@ -193,7 +193,7 @@ object PlayerHolder {
             player.prepare()
             player.playWhenReady = true
         } catch (t: Throwable) {
-            error.value = "This video can't be played: ${t.message}"
+            error.value = app.vidflow.core.friendlyError(t)
         }
     }
 

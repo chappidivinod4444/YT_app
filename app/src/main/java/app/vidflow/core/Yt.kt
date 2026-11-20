@@ -122,6 +122,10 @@ fun friendlyError(t: Throwable): String {
             is ContentNotAvailableException -> return e.message?.takeIf { it.isNotBlank() } ?: "This content isn't available."
             is IOException -> return "Network problem. Check your connection."
         }
+        val m = e.message.orEmpty()
+        if (m.contains("HTML document") || m.contains("expected JSON") || m.contains("HTTP 429")) {
+            return "YouTube is busy right now. Tap Retry in a few seconds."
+        }
         e = e.cause
     }
     return t.message ?: "Something went wrong"
@@ -190,12 +194,43 @@ object Yt {
 
     // ---- video
 
+    /** At most two video lookups at a time, so pre-loading never floods YouTube. */
+    private val streamGate = java.util.concurrent.Semaphore(2, true)
+    private val streamLocks = ConcurrentHashMap<String, Any>()
+
     fun stream(url: String, fresh: Boolean = false): StreamInfo {
-        val now = System.currentTimeMillis()
-        if (!fresh) streamCache[url]?.let { (at, info) -> if (now - at < 2 * 60 * 60 * 1000) return info }
-        val info = StreamInfo.getInfo(service, url)
-        streamCache[url] = now to info
-        return info
+        // One lookup per video: a second caller waits and then reuses the result.
+        synchronized(streamLocks.getOrPut(url) { Any() }) {
+            val now = System.currentTimeMillis()
+            if (!fresh) streamCache[url]?.let { (at, info) -> if (now - at < 2 * 60 * 60 * 1000) return info }
+            var attempt = 0
+            while (true) {
+                streamGate.acquire()
+                try {
+                    val info = StreamInfo.getInfo(service, url)
+                    streamCache[url] = System.currentTimeMillis() to info
+                    return info
+                } catch (t: Throwable) {
+                    // YouTube sometimes answers with a web page instead of data when busy:
+                    // wait a moment and ask again before giving up.
+                    if (!isBusyPage(t) || attempt >= 2) throw t
+                } finally {
+                    streamGate.release()
+                }
+                attempt++
+                Thread.sleep(1500L * attempt)
+            }
+        }
+    }
+
+    fun isBusyPage(t: Throwable): Boolean {
+        var e: Throwable? = t
+        while (e != null) {
+            val m = e.message.orEmpty()
+            if (m.contains("HTML document") || m.contains("expected JSON") || m.contains("HTTP 429")) return true
+            e = e.cause
+        }
+        return false
     }
 
     fun related(info: StreamInfo): List<Item> = info.relatedItems.items()

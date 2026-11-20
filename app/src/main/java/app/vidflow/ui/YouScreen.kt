@@ -351,6 +351,22 @@ fun SettingsScreen(nav: Nav, say: (String) -> Unit, openSetup: () -> Unit, openL
         item { SettingsLink("Clear watch history") { confirm = "history" } }
         item { SettingsLink("Show Shorts I've already seen again") { SeenShorts.clear(); say("Done: seen Shorts can show up again") } }
         item {
+            val ctx = androidx.compose.ui.platform.LocalContext.current
+            val version = remember {
+                runCatching {
+                    val info = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
+                    "v" + androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(info)
+                }.getOrDefault("?")
+            }
+            Text(
+                "Vidflow $version",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth().padding(20.dp),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
+        }
+        item {
             Text(
                 "Vidflow · no ads · no tracking. Your history, likes and playlists are saved only on this phone.",
                 style = MaterialTheme.typography.bodySmall,

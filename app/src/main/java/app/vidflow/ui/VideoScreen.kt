@@ -220,7 +220,11 @@ fun VideoScreen(video: Video, nav: Nav, onFullscreen: () -> Unit) {
                         textAlign = TextAlign.Center,
                         modifier = Modifier.padding(horizontal = 24.dp),
                     )
-                    Button(onClick = { load(fresh = true) }, modifier = Modifier.padding(top = 8.dp)) { Text("Retry") }
+                    Button(
+                        onClick = { load(fresh = true) },
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
+                        modifier = Modifier.padding(top = 8.dp),
+                    ) { Text("Retry", color = Color.Black, fontWeight = FontWeight.SemiBold) }
                 }
             }
         }
