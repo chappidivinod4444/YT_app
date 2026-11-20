@@ -45,6 +45,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.sp
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
