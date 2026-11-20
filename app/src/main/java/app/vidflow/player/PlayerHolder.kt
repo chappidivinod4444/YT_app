@@ -23,6 +23,7 @@ import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
+import app.vidflow.core.friendlyError
 import app.vidflow.core.HttpDownloader
 import app.vidflow.core.Library
 import app.vidflow.core.Video
@@ -193,7 +194,7 @@ object PlayerHolder {
             player.prepare()
             player.playWhenReady = true
         } catch (t: Throwable) {
-            error.value = app.vidflow.core.friendlyError(t)
+            error.value = friendlyError(t)
         }
     }
 
