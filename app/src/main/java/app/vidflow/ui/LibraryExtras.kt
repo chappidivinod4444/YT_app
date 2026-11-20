@@ -43,6 +43,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -59,46 +62,120 @@ import coil3.compose.AsyncImage
 
 // ------------------------------------------------------------------ dialogs
 
+/** "Save to…" sheet, like YouTube's: tap a list to add or remove the video. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-fun SaveToPlaylistDialog(video: Video, onClose: () -> Unit) {
+fun SaveToPlaylistDialog(video: Video, shorts: Boolean = false, onClose: () -> Unit) {
     val lists by Saved.playlists.collectAsState()
-    var newName by remember { mutableStateOf("") }
-    AlertDialog(
+    val context = LocalContext.current
+    var creating by remember { mutableStateOf(false) }
+    // Saved Shorts only shows up when saving a short.
+    val shown = lists.filter { shorts || it.id != Saved.SAVED_SHORTS }
+        .sortedBy { if (it.id == Saved.WATCH_LATER) 0 else if (it.id == Saved.SAVED_SHORTS) 1 else 2 }
+
+    androidx.compose.material3.ModalBottomSheet(
         onDismissRequest = onClose,
-        title = { Text("Save to…") },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                lists.forEach { p ->
+        containerColor = Color(0xFF212121),
+        contentColor = Color.White,
+    ) {
+        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 12.dp)) {
+            Text("Save to…", fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 24.dp, bottom = 12.dp))
+            Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
+                shown.forEach { p ->
                     val inside = p.videos.any { it.url == video.url }
                     Row(
-                        Modifier.fillMaxWidth().clickable {
-                            if (inside) Saved.removeFrom(p.id, video.url) else Saved.addTo(p.id, video)
-                        }.padding(vertical = 10.dp),
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                if (inside) Saved.removeFrom(p.id, video.url) else Saved.addTo(p.id, video)
+                                android.widget.Toast.makeText(
+                                    context, if (inside) "Removed from ${p.name}" else "Saved to ${p.name}", android.widget.Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                            .padding(horizontal = 20.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(if (inside) "☑" else "☐", style = MaterialTheme.typography.titleLarge)
-                        Spacer(Modifier.width(12.dp))
-                        Text(p.name, modifier = Modifier.weight(1f))
-                        Text("${p.videos.size}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        PlaylistStackThumb(p.videos.firstOrNull()?.thumbnail)
+                        Spacer(Modifier.width(16.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(p.name, fontSize = 17.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                            Text(
+                                "Private" + if (p.videos.isNotEmpty()) " · ${p.videos.size} video${if (p.videos.size == 1) "" else "s"}" else "",
+                                fontSize = 13.sp, color = Color(0xFFAAAAAA),
+                            )
+                        }
+                        androidx.compose.material3.Icon(
+                            if (inside) androidx.compose.material.icons.Icons.Filled.Bookmark
+                            else androidx.compose.material.icons.Icons.Outlined.BookmarkBorder,
+                            contentDescription = if (inside) "Saved" else "Save",
+                            modifier = Modifier.size(28.dp),
+                        )
                     }
                 }
-                Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = newName, onValueChange = { newName = it },
-                        placeholder = { Text("New playlist name") }, singleLine = true,
-                        modifier = Modifier.weight(1f),
-                    )
-                    TextButton(enabled = newName.isNotBlank(), onClick = {
-                        val p = Saved.createPlaylist(newName)
-                        Saved.addTo(p.id, video)
-                        newName = ""
-                    }) { Text("Create") }
-                }
             }
-        },
-        confirmButton = { TextButton(onClick = onClose) { Text("Done") } },
-    )
+            Row(
+                Modifier
+                    .padding(horizontal = 20.dp, vertical = 12.dp)
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(Color(0x1FFFFFFF))
+                    .clickable { creating = true }
+                    .padding(vertical = 12.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Add, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("New playlist", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
+    }
+
+    if (creating) {
+        var name by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { creating = false },
+            title = { Text("New playlist") },
+            text = {
+                OutlinedTextField(
+                    value = name, onValueChange = { name = it },
+                    placeholder = { Text("Choose a title") }, singleLine = true,
+                )
+            },
+            confirmButton = {
+                TextButton(enabled = name.isNotBlank(), onClick = {
+                    val p = Saved.createPlaylist(name)
+                    Saved.addTo(p.id, video)
+                    android.widget.Toast.makeText(context, "Saved to ${p.name}", android.widget.Toast.LENGTH_SHORT).show()
+                    creating = false
+                }) { Text("Create") }
+            },
+            dismissButton = { TextButton(onClick = { creating = false }) { Text("Cancel") } },
+        )
+    }
+}
+
+/** A playlist cover with the little "stack" edge above it. */
+@Composable
+private fun PlaylistStackThumb(url: String?) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            Modifier.width(100.dp).height(4.dp)
+                .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
+                .background(Color(0x55FFFFFF))
+        )
+        Box(
+            Modifier.width(120.dp).aspectRatio(16f / 9f).clip(RoundedCornerShape(10.dp)).background(Color(0xFF3A3A3A)),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (url != null) coil3.compose.AsyncImage(
+                model = url, contentDescription = null,
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop, modifier = Modifier.fillMaxSize(),
+            ) else androidx.compose.material3.Icon(
+                androidx.compose.material.icons.Icons.Outlined.BookmarkBorder, contentDescription = null, tint = Color(0x99FFFFFF),
+            )
+        }
+    }
 }
 
 @Composable

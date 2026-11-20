@@ -42,6 +42,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -514,6 +516,8 @@ fun PagedColumn(
     onLoaded: ((List<Item>) -> Unit)? = null,
     /** Extra work when you pull down to refresh. */
     onRefresh: (suspend () -> Unit)? = null,
+    /** Play the video in view silently when scrolling stops (Home). */
+    previews: Boolean = false,
     header: LazyListScope.() -> Unit = {},
 ) {
     val k = key.toString()
@@ -559,6 +563,32 @@ fun PagedColumn(
             last >= state.layoutInfo.totalItemsCount - 5
         }
     }
+    // The video to preview: the first one fully in view once scrolling has stopped.
+    val previewUrl by remember(k) {
+        derivedStateOf {
+            if (!previews || state.isScrollInProgress) null
+            else {
+                val info = state.layoutInfo
+                val videos = list.items.filterIsInstance<Video>().filter { !it.live }.associateBy { it.url }
+                info.visibleItemsInfo.firstOrNull { item ->
+                    val key = item.key as? String
+                    key != null && key in videos &&
+                        item.offset >= info.viewportStartOffset - 4 &&
+                        item.offset + item.size * 0.55f <= info.viewportEndOffset
+                }?.key as? String
+            }
+        }
+    }
+    @Composable
+    fun ListRow(item: Item) {
+        if (previews && item is Video && item.url == previewUrl) {
+            Box {
+                ItemView(item, nav, bigVideos)
+                PreviewOverlay(item, nav, Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+            }
+        } else ItemView(item, nav, bigVideos)
+    }
+
     LaunchedEffect(nearEnd, list.items.size, list.loading, list.moreFailed) {
         if (nearEnd && list.next != null && !list.loading && !list.refreshing && !list.moreFailed) list.loadMore()
     }
@@ -593,7 +623,7 @@ fun PagedColumn(
                 var shelf = 0
                 while (start < all.size) {
                     val end = minOf(all.size, if (shelf == 0) 3 else start + repeatEvery)
-                    items(all.subList(start, end), key = { it.url }, contentType = { it::class }) { ItemView(it, nav, bigVideos) }
+                    items(all.subList(start, end), key = { it.url }, contentType = { it::class }) { ListRow(it) }
                     if (end - start == (if (shelf == 0) 3 else repeatEvery)) {
                         val n = shelf
                         item(key = "shelf-$n", contentType = "shelf") { repeatInsert(n) }
@@ -603,10 +633,10 @@ fun PagedColumn(
                 }
             } else {
                 val split = if (insert != null) minOf(3, list.items.size) else list.items.size
-                items(list.items.subList(0, split), key = { it.url }, contentType = { it::class }) { ItemView(it, nav, bigVideos) }
+                items(list.items.subList(0, split), key = { it.url }, contentType = { it::class }) { ListRow(it) }
                 if (insert != null && list.items.isNotEmpty()) item(key = "insert", contentType = "insert") { insert() }
                 if (split < list.items.size) {
-                    items(list.items.subList(split, list.items.size), key = { it.url }, contentType = { it::class }) { ItemView(it, nav, bigVideos) }
+                    items(list.items.subList(split, list.items.size), key = { it.url }, contentType = { it::class }) { ListRow(it) }
                 }
             }
             if (list.loading && list.items.isNotEmpty()) item { Loading() }
@@ -618,5 +648,59 @@ fun PagedColumn(
                 }
             }
         }
+    }
+}
+
+/** The silent preview drawn over a video's thumbnail; taps still open the video. */
+@Composable
+private fun PreviewOverlay(v: Video, nav: Nav, modifier: Modifier) {
+    val showing by app.vidflow.player.Preview.showing.collectAsState()
+    val position by app.vidflow.player.Preview.position.collectAsState()
+    LaunchedEffect(v.url) {
+        kotlinx.coroutines.delay(700)
+        app.vidflow.player.Preview.start(v)
+    }
+    DisposableEffect(v.url) {
+        onDispose { if (app.vidflow.player.Preview.url.value == v.url) app.vidflow.player.Preview.stop() }
+    }
+    val lifecycle = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    DisposableEffect(lifecycle) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, e ->
+            if (e == androidx.lifecycle.Lifecycle.Event.ON_PAUSE) app.vidflow.player.Preview.stop()
+        }
+        lifecycle.lifecycle.addObserver(obs)
+        onDispose { lifecycle.lifecycle.removeObserver(obs) }
+    }
+    Box(modifier) {
+        androidx.compose.ui.viewinterop.AndroidView(
+            factory = { ctx -> android.view.TextureView(ctx).also { app.vidflow.player.Preview.player().setVideoTextureView(it) } },
+            onRelease = { app.vidflow.player.Preview.player().clearVideoTextureView(it) },
+            modifier = Modifier.fillMaxSize().graphicsLayer { alpha = if (showing) 1f else 0f },
+        )
+        if (showing) {
+            val left = ((v.durationSec * 1000L - position) / 1000L).coerceAtLeast(0)
+            Row(
+                Modifier.align(Alignment.BottomEnd).padding(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(28.dp).clip(CircleShape).background(Color(0x99000000)), contentAlignment = Alignment.Center) {
+                    androidx.compose.material3.Icon(
+                        androidx.compose.material.icons.Icons.Filled.VolumeOff, contentDescription = "Muted",
+                        tint = Color.White, modifier = Modifier.size(16.dp),
+                    )
+                }
+                if (v.durationSec > 0) Text(
+                    formatDuration(left), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                    modifier = Modifier.background(Color(0x99000000), RoundedCornerShape(4.dp)).padding(horizontal = 5.dp, vertical = 2.dp),
+                )
+            }
+            // Thin red progress line along the bottom, like YouTube.
+            if (v.durationSec > 0) Box(
+                Modifier.align(Alignment.BottomStart).fillMaxWidth(((position / 1000f) / v.durationSec).coerceIn(0f, 1f))
+                    .height(3.dp).background(Color(0xFFFF0033))
+            )
+        }
+        Box(Modifier.matchParentSize().clickable { app.vidflow.player.Preview.stop(); nav.video(v) })
     }
 }

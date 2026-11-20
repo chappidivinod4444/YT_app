@@ -79,6 +79,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.withLock
 
 // -------------------------------------------------------------------- top
 
@@ -191,10 +192,12 @@ fun HomeScreen(nav: Nav, openExplore: () -> Unit, openNotifications: () -> Unit)
     if (tab == "All") {
         PagedColumn(
             key = "home-all", nav = nav, load = { Yt.recommended() }, header = header,
+            previews = true,
+            repeatEvery = 5,
             repeatInsert = { n ->
                 LaunchedEffect(n) { HomeShorts.ensure(n + 2) }
                 val pool by HomeShorts.pool.collectAsState()
-                ShortsGrid(pool.drop(n * 4).take(4), nav)
+                ShortsGrid(HomeShorts.grid(pool, n), nav)
             },
             cached = { app.vidflow.core.HomeCache.load() },
             onLoaded = { app.vidflow.core.HomeCache.save(it) },
@@ -212,33 +215,38 @@ fun HomeScreen(nav: Nav, openExplore: () -> Unit, openNotifications: () -> Unit)
 object HomeShorts {
     val pool = kotlinx.coroutines.flow.MutableStateFlow<List<Video>>(emptyList())
     private var next: (suspend () -> Paged)? = null
-    private var loading = false
+    private val lock = kotlinx.coroutines.sync.Mutex()
+    const val PER_GRID = 6
+
+    /** The 6 shorts for grid [n]; reuses older ones only if YouTube ran out of new ones. */
+    fun grid(pool: List<Video>, n: Int): List<Video> = when {
+        pool.size >= (n + 1) * PER_GRID -> pool.subList(n * PER_GRID, (n + 1) * PER_GRID)
+        pool.size >= PER_GRID * 2 -> List(PER_GRID) { pool[(n * PER_GRID + it) % pool.size] }
+        else -> emptyList()
+    }
 
     /** New shorts for every grid (pull to refresh on Home). */
     suspend fun reset() {
-        pool.value = emptyList()
-        next = null
-        loading = false
+        lock.withLock {
+            pool.value = emptyList()
+            next = null
+        }
         ensure(3)
     }
 
-    /** Makes sure there are enough shorts for [grids] grids. */
+    /** Makes sure there are enough shorts for [grids] grids. Waits its turn instead of skipping. */
     suspend fun ensure(grids: Int) {
-        if (loading || pool.value.size >= grids * 4) return
-        loading = true
-        try {
+        if (pool.value.size >= grids * PER_GRID) return
+        lock.withLock {
             withContext(Dispatchers.IO) {
                 var tries = 0
-                while (pool.value.size < grids * 4 && tries++ < 4) {
-                    val page = next?.invoke() ?: Yt.shortsFeed(Library.subscriptions.value.map { it.url })
+                while (pool.value.size < grids * PER_GRID && tries++ < 5) {
+                    val page = runCatching { next?.invoke() ?: Yt.shortsFeed(Library.subscriptions.value.map { it.url }) }.getOrNull() ?: continue
                     next = page.next
                     val seen = pool.value.map { it.url }.toHashSet()
                     pool.value = pool.value + page.items.filterIsInstance<Video>().filter { it.url !in seen }
                 }
             }
-        } catch (_: Throwable) {
-        } finally {
-            loading = false
         }
     }
 }
@@ -300,13 +308,13 @@ fun ShortsGrid(shorts: List<Video>, nav: Nav) {
             Spacer(Modifier.width(10.dp))
             Text("Shorts", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         }
-        shorts.take(4).chunked(2).forEachIndexed { row, pair ->
+        shorts.take(6).chunked(3).forEachIndexed { row, pair ->
             Row(
-                Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 pair.forEachIndexed { col, s ->
-                    val index = row * 2 + col
+                    val index = row * 3 + col
                     Box(
                         Modifier
                             .weight(1f)
@@ -321,14 +329,14 @@ fun ShortsGrid(shorts: List<Video>, nav: Nav) {
                                 .align(Alignment.BottomStart)
                                 .fillMaxWidth()
                                 .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xC0000000))))
-                                .padding(10.dp)
+                                .padding(6.dp)
                         ) {
-                            Text(s.title, color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            if (s.views >= 0) Text(formatCount(s.views) + " views", color = Color(0xCCFFFFFF), style = MaterialTheme.typography.labelSmall)
+                            Text(s.title, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, lineHeight = 15.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            if (s.views >= 0) Text(formatCount(s.views) + " views", color = Color(0xCCFFFFFF), fontSize = 10.sp)
                         }
                     }
                 }
-                if (pair.size == 1) Spacer(Modifier.weight(1f))
+                repeat(3 - pair.size) { Spacer(Modifier.weight(1f)) }
             }
         }
     }

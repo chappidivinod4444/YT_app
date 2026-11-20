@@ -291,6 +291,16 @@ object PlayerHolder {
         return video to audio
     }
 
+    /** Picture only, low quality: for the silent previews on Home. */
+    fun previewSource(v: Video, i: StreamInfo): MediaSource? {
+        if (v.live) return null
+        val (video, _) = pick(i, 360) ?: return null
+        return dash(video.content, video.itagItem!!, i.duration, cached, v, i)
+    }
+
+    /** Lets the preview player share the disk cache and network settings. */
+    fun appContext(): Context = app
+
     fun chapterAt(ms: Long): String? = chapters.value.lastOrNull { it.first <= ms }?.second
 
     fun stop() {

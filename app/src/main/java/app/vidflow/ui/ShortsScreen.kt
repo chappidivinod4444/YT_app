@@ -24,6 +24,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.outlined.AccountCircle
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.Reply
@@ -66,6 +71,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -136,6 +144,8 @@ fun ShortsScreen(
     }
 
     var commentsFor by remember(key) { mutableStateOf<String?>(null) }
+    var current by remember(key) { mutableStateOf<Video?>(null) }
+    var menu by remember { mutableStateOf(false) }
     Box(
         Modifier
             .fillMaxSize()
@@ -154,6 +164,7 @@ fun ShortsScreen(
             videos.isEmpty() -> ShortsSkeleton()
             else -> {
                 val pager = rememberPagerState(initialPage = startIndex.coerceIn(0, videos.lastIndex)) { videos.size }
+                LaunchedEffect(pager.settledPage, videos.size) { current = videos.getOrNull(pager.settledPage) }
                 LaunchedEffect(pager.currentPage, videos.size) {
                     // Load more well before the end, and pre-load the start of the next three
                     // so they begin playing the moment you swipe.
@@ -200,10 +211,11 @@ fun ShortsScreen(
             IconButton(onClick = nav.search) {
                 Icon(Icons.Outlined.Search, contentDescription = "Search", tint = Color.White)
             }
-            IconButton(onClick = { generation++ }) {
-                Icon(Icons.Outlined.Refresh, contentDescription = "New shorts", tint = Color.White)
+            IconButton(onClick = { menu = true }) {
+                Icon(Icons.Filled.MoreVert, contentDescription = "More", tint = Color.White)
             }
         }
+        current?.let { v -> if (menu) ShortsMenu(v, nav, onRefresh = { generation++ }) { menu = false } }
     }
 }
 
@@ -300,7 +312,7 @@ private fun ShortPage(v: Video, active: Boolean, nav: Nav, commentsOpen: Boolean
         val subscribed = remember(subs, channelUrl) { Library.isSubscribed(channelUrl) }
         var showSave by remember(v.url) { mutableStateOf(false) }
         var showDownload by remember(v.url) { mutableStateOf(false) }
-        if (showSave) SaveToPlaylistDialog(v) { showSave = false }
+        if (showSave) SaveToPlaylistDialog(v, shorts = true) { showSave = false }
         if (showDownload) DownloadDialog(v, listOf(1080, 720, 480)) { showDownload = false }
 
         val avatar = info?.uploaderAvatars?.best(200) ?: v.channelAvatar
@@ -375,7 +387,9 @@ private fun ShortPage(v: Video, active: Boolean, nav: Nav, commentsOpen: Boolean
                     tint = if (liked) Color(0xFFFF3B5C) else Color.White,
                 ) { app.vidflow.core.Saved.toggleLike(v) }
                 SideAction(Icons.Outlined.Comment, if (comments >= 0) formatCount(comments) else "Comments") { setComments(true) }
-                SideAction(Icons.Outlined.BookmarkBorder, "Save") { showSave = true }
+                val lists by app.vidflow.core.Saved.playlists.collectAsState()
+                val saved = lists.any { p -> p.videos.any { it.url == v.url } }
+                SideAction(if (saved) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder, "Save") { showSave = true }
                 SideAction(Icons.Outlined.Reply, "Share", mirror = true) {
                     context.startActivity(
                         Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, v.url), "Share")
@@ -436,5 +450,60 @@ private fun SideAction(icon: ImageVector, label: String, tint: Color = Color.Whi
             label, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium,
             maxLines = 1, style = Shadowed,
         )
+    }
+}
+
+/** The ⋮ menu at the top of Shorts. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ShortsMenu(v: Video, nav: Nav, onRefresh: () -> Unit, onClose: () -> Unit) {
+    val context = LocalContext.current
+    var save by remember { mutableStateOf(false) }
+    var download by remember { mutableStateOf(false) }
+    var about by remember { mutableStateOf(false) }
+    if (save) SaveToPlaylistDialog(v, shorts = true) { save = false; onClose() }
+    if (download) DownloadDialog(v, listOf(1080, 720, 480)) { download = false; onClose() }
+    if (save || download) return
+    ModalBottomSheet(onDismissRequest = onClose, containerColor = Color(0xFF212121), contentColor = Color.White) {
+        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 12.dp)) {
+            if (about) {
+                Text(v.title, fontSize = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 20.dp))
+                Text(
+                    listOfNotNull(v.channel, v.views.takeIf { it >= 0 }?.let { formatCount(it) + " views" }, v.uploaded).joinToString(" · "),
+                    color = Color(0xFFAAAAAA), fontSize = 13.sp, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                )
+                return@Column
+            }
+            MenuRow(Icons.Outlined.Info, "Description") { about = true }
+            MenuRow(Icons.Outlined.BookmarkBorder, "Save to playlist") { save = true }
+            MenuRow(Icons.Outlined.FileDownload, "Download") { download = true }
+            MenuRow(Icons.Outlined.Share, "Share") {
+                context.startActivity(
+                    Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, v.url), "Share")
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+                onClose()
+            }
+            MenuRow(Icons.Outlined.Link, "Copy link") {
+                val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("link", v.url))
+                android.widget.Toast.makeText(context, "Link copied", android.widget.Toast.LENGTH_SHORT).show()
+                onClose()
+            }
+            v.channelUrl?.let { url -> MenuRow(Icons.Outlined.AccountCircle, "Go to channel") { onClose(); nav.channel(url) } }
+            MenuRow(Icons.Outlined.Refresh, "Show new shorts") { onClose(); onRefresh() }
+        }
+    }
+}
+
+@Composable
+private fun MenuRow(icon: ImageVector, text: String, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 22.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, modifier = Modifier.size(24.dp))
+        Spacer(Modifier.width(20.dp))
+        Text(text, fontSize = 16.sp)
     }
 }

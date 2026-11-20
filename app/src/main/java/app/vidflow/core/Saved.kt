@@ -39,7 +39,20 @@ object Saved {
             }
         } catch (_: Throwable) {
         }
+        // Built-in lists, like YouTube's.
+        val have = playlists.value.map { it.id }.toSet()
+        val defaults = listOf(LocalPlaylist(WATCH_LATER, "Watch later", emptyList()), LocalPlaylist(SAVED_SHORTS, "Saved Shorts", emptyList()))
+            .filter { it.id !in have }
+        if (defaults.isNotEmpty()) {
+            playlists.value = defaults + playlists.value
+            persist()
+        }
     }
+
+    const val WATCH_LATER = "watch-later"
+    const val SAVED_SHORTS = "saved-shorts"
+
+    fun isSaved(url: String) = playlists.value.any { p -> p.videos.any { it.url == url } }
 
     private fun JSONArray?.videos(): List<Video> = if (this == null) emptyList()
     else (0 until length()).mapNotNull { runCatching { Library.videoFrom(getJSONObject(it)) }.getOrNull() }
@@ -73,7 +86,8 @@ object Saved {
 
     fun addTo(id: String, v: Video) {
         playlists.value = playlists.value.map { p ->
-            if (p.id == id && p.videos.none { it.url == v.url }) p.copy(videos = p.videos + v) else p
+            // Newest first, like YouTube.
+            if (p.id == id && p.videos.none { it.url == v.url }) p.copy(videos = listOf(v) + p.videos) else p
         }
         persist()
     }
