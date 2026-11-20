@@ -465,6 +465,12 @@ object Yt {
      * An endless, varied feed: your channels' shorts, suggestions from what you watched,
      * and a fresh random mix of topics each time. Shorts you've seen are skipped.
      */
+    /** A Shorts page fetched when the app starts; used once by the Shorts tab. */
+    @Volatile
+    var warmShorts: Paged? = null
+
+    fun takeWarmShorts(): Paged? = warmShorts.also { warmShorts = null }
+
     fun shortsFeed(subscriptionUrls: List<String>): Paged {
         val shown = java.util.Collections.synchronizedSet(HashSet<String>())
 

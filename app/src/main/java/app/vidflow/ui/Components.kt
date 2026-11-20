@@ -45,6 +45,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.collectAsState
 import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.outlined.Headphones
+import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.outlined.FileDownload
+import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -68,42 +74,44 @@ import kotlinx.coroutines.withContext
 
 // ------------------------------------------------------------------- theme
 
-val Accent = Color(0xFF7C5CFF)
+/** YouTube-style red. */
+val Accent = Color(0xFFFF0033)
 
 private val DarkScheme = darkColorScheme(
-    primary = Color(0xFFA996FF),
-    onPrimary = Color(0xFF1B0F5C),
-    primaryContainer = Color(0xFF3A2A99),
-    onPrimaryContainer = Color(0xFFE6DEFF),
-    secondary = Color(0xFF4DD0C8),
-    background = Color(0xFF0D0D12),
-    onBackground = Color(0xFFF1F1F5),
-    surface = Color(0xFF0D0D12),
-    onSurface = Color(0xFFF1F1F5),
-    surfaceVariant = Color(0xFF1E1E26),
-    onSurfaceVariant = Color(0xFFA3A3B3),
-    surfaceContainer = Color(0xFF17171F),
-    surfaceContainerHigh = Color(0xFF1E1E28),
-    surfaceContainerHighest = Color(0xFF272733),
-    surfaceContainerLow = Color(0xFF121219),
-    outlineVariant = Color(0xFF2A2A35),
+    primary = Color(0xFFFF0033),
+    onPrimary = Color.White,
+    primaryContainer = Color(0xFF3A0A12),
+    onPrimaryContainer = Color(0xFFFFDADC),
+    secondary = Color(0xFF3EA6FF),
+    background = Color(0xFF0F0F0F),
+    onBackground = Color(0xFFF1F1F1),
+    surface = Color(0xFF0F0F0F),
+    onSurface = Color(0xFFF1F1F1),
+    surfaceVariant = Color(0xFF272727),
+    onSurfaceVariant = Color(0xFFAAAAAA),
+    surfaceContainer = Color(0xFF212121),
+    surfaceContainerHigh = Color(0xFF272727),
+    surfaceContainerHighest = Color(0xFF3F3F3F),
+    surfaceContainerLow = Color(0xFF181818),
+    outlineVariant = Color(0xFF303030),
 )
 
 private val LightScheme = lightColorScheme(
-    primary = Color(0xFF5B3FE0),
+    primary = Color(0xFFFF0033),
     onPrimary = Color.White,
-    primaryContainer = Color(0xFFE6DEFF),
-    onPrimaryContainer = Color(0xFF1B0F5C),
-    secondary = Color(0xFF00897B),
+    primaryContainer = Color(0xFFFFE5E8),
+    onPrimaryContainer = Color(0xFF410008),
+    secondary = Color(0xFF065FD4),
     background = Color.White,
     surface = Color.White,
-    surfaceVariant = Color(0xFFF0F0F4),
-    onSurfaceVariant = Color(0xFF5E5E6E),
-    surfaceContainer = Color(0xFFF3F3F7),
-    surfaceContainerHigh = Color(0xFFEBEBF0),
-    surfaceContainerHighest = Color(0xFFE2E2E9),
-    surfaceContainerLow = Color(0xFFF8F8FB),
-    outlineVariant = Color(0xFFE0E0E6),
+    onSurface = Color(0xFF0F0F0F),
+    surfaceVariant = Color(0xFFF2F2F2),
+    onSurfaceVariant = Color(0xFF606060),
+    surfaceContainer = Color(0xFFF2F2F2),
+    surfaceContainerHigh = Color(0xFFE5E5E5),
+    surfaceContainerHighest = Color(0xFFD9D9D9),
+    surfaceContainerLow = Color(0xFFF9F9F9),
+    outlineVariant = Color(0xFFE5E5E5),
 )
 
 @Composable
@@ -189,38 +197,52 @@ fun VideoCard(v: Video, nav: Nav) {
             .padding(bottom = 18.dp)
     ) {
         Thumb(v.thumbnail, v.durationSec, v.live, Modifier.fillMaxWidth(), corner = 0)
-        Row(Modifier.padding(start = 12.dp, end = 0.dp, top = 10.dp)) {
+        Row(Modifier.padding(start = 12.dp, end = 0.dp, top = 12.dp)) {
             Box(Modifier.clickable(enabled = v.channelUrl != null) { v.channelUrl?.let(nav.channel) }) {
-                Avatar(v.channelAvatar)
+                Avatar(v.channelAvatar, 36)
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(v.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(videoSubtitle(v), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(
+                    v.title, fontSize = 15.sp, lineHeight = 20.sp, fontWeight = FontWeight.Medium,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    videoSubtitle(v), fontSize = 12.sp, lineHeight = 16.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 3.dp),
+                )
             }
             VideoMenu(v, nav)
         }
     }
 }
 
-/** The ⋮ menu on a video. */
+/** The ⋮ menu on a video: a sheet from the bottom, like YouTube. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun VideoMenu(v: Video, nav: Nav) {
     var open by remember { mutableStateOf(false) }
     var save by remember { mutableStateOf(false) }
     var download by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
-    if (save) SaveToPlaylistDialog(v) { save = false }
+    if (save) SaveToPlaylistDialog(v, shorts = v.short) { save = false }
     if (download) DownloadDialog(v, emptyList()) { download = false }
-    Box {
-        androidx.compose.material3.IconButton(onClick = { open = true }, modifier = Modifier.size(36.dp)) {
-            Text("\u22EE", fontSize = 18.sp, fontWeight = FontWeight.Bold)
-        }
-        androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            androidx.compose.material3.DropdownMenuItem(text = { Text("Play in background") }, onClick = { open = false; nav.background(v) })
-            androidx.compose.material3.DropdownMenuItem(text = { Text("Save to playlist") }, onClick = { open = false; save = true })
-            androidx.compose.material3.DropdownMenuItem(text = { Text("Download") }, onClick = { open = false; download = true })
-            androidx.compose.material3.DropdownMenuItem(text = { Text("Share") }, onClick = {
+    androidx.compose.material3.IconButton(onClick = { open = true }, modifier = Modifier.size(40.dp)) {
+        androidx.compose.material3.Icon(
+            androidx.compose.material.icons.Icons.Filled.MoreVert, contentDescription = "More",
+            modifier = Modifier.size(20.dp),
+        )
+    }
+    if (open) androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = { open = false },
+        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+    ) {
+        Column(Modifier.fillMaxWidth().padding(bottom = 16.dp)) {
+            SheetItem(androidx.compose.material.icons.Icons.Outlined.Headphones, "Play in background") { open = false; nav.background(v) }
+            SheetItem(androidx.compose.material.icons.Icons.Outlined.BookmarkBorder, "Save to playlist") { open = false; save = true }
+            SheetItem(androidx.compose.material.icons.Icons.Outlined.FileDownload, "Download video") { open = false; download = true }
+            SheetItem(androidx.compose.material.icons.Icons.Outlined.Share, "Share") {
                 open = false
                 context.startActivity(
                     android.content.Intent.createChooser(
@@ -228,11 +250,24 @@ fun VideoMenu(v: Video, nav: Nav) {
                         "Share",
                     ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
                 )
-            })
+            }
             if (v.channelUrl != null) {
-                androidx.compose.material3.DropdownMenuItem(text = { Text("Go to channel") }, onClick = { open = false; v.channelUrl.let(nav.channel) })
+                SheetItem(androidx.compose.material.icons.Icons.Outlined.AccountCircle, "Go to channel") { open = false; v.channelUrl.let(nav.channel) }
             }
         }
+    }
+}
+
+/** One line in a bottom-sheet menu: icon and text. */
+@Composable
+fun SheetItem(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 20.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        androidx.compose.material3.Icon(icon, contentDescription = null, modifier = Modifier.size(24.dp))
+        Spacer(Modifier.width(20.dp))
+        Text(text, fontSize = 15.sp)
     }
 }
 

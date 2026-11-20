@@ -30,6 +30,9 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
@@ -96,25 +99,27 @@ fun AppBar(title: String, nav: Nav, showBack: Boolean = false, actions: @Composa
             IconButton(onClick = nav.back) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
         } else {
             Spacer(Modifier.width(12.dp))
+            // Vidflow's own mark: a red circle with a play arrow.
             Box(
                 Modifier
                     .size(26.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Brush.linearGradient(listOf(Color(0xFF7C5CFF), Color(0xFF4DD0C8)))),
+                    .clip(androidx.compose.foundation.shape.CircleShape)
+                    .background(Accent),
                 contentAlignment = Alignment.Center,
-            ) { Text("▶", color = Color.White, fontSize = 12.sp) }
-            Spacer(Modifier.width(8.dp))
+            ) { Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp)) }
+            Spacer(Modifier.width(6.dp))
         }
         Text(
             title,
             style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
+            fontWeight = if (showBack) FontWeight.SemiBold else FontWeight.Bold,
+            letterSpacing = if (showBack) androidx.compose.ui.unit.TextUnit.Unspecified else (-0.8).sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
         actions()
-        IconButton(onClick = nav.search) { Icon(Icons.Filled.Search, contentDescription = "Search") }
+        IconButton(onClick = nav.search) { Icon(Icons.Outlined.Search, contentDescription = "Search", modifier = Modifier.size(26.dp)) }
     }
 }
 
@@ -126,7 +131,7 @@ fun BellButton(onClick: () -> Unit) {
     val seen by app.vidflow.core.Notifications.lastSeen.collectAsState()
     val hasNew = feed.orEmpty().any { (it.uploadedAtMillis ?: 0) > seen }
     Box {
-        IconButton(onClick = onClick) { Icon(Icons.Filled.Notifications, contentDescription = "New uploads") }
+        IconButton(onClick = onClick) { Icon(Icons.Outlined.Notifications, contentDescription = "New uploads", modifier = Modifier.size(26.dp)) }
         if (hasNew) Box(
             Modifier
                 .align(Alignment.TopEnd)
@@ -292,54 +297,73 @@ private fun TopicEditor(current: List<String>, onClose: () -> Unit) {
     )
 }
 
-/** Two-by-two grid of shorts, like a shelf in the feed. */
+/** Shorts shelf in the feed: 2 across, 3 down, tall cards like YouTube's. */
 @Composable
 fun ShortsGrid(shorts: List<Video>, nav: Nav) {
     if (shorts.isEmpty()) return
-    Column(Modifier.padding(bottom = 18.dp)) {
-        Row(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier
-                    .size(26.dp)
-                    .clip(RoundedCornerShape(7.dp))
-                    .background(Brush.linearGradient(listOf(Color(0xFF7C5CFF), Color(0xFF4DD0C8)))),
-                contentAlignment = Alignment.Center,
-            ) { Text("\u26A1", fontSize = 14.sp) }
-            Spacer(Modifier.width(10.dp))
-            Text("Shorts", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+    Column(
+        Modifier
+            .padding(bottom = 16.dp)
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .padding(top = 12.dp, bottom = 4.dp)
+    ) {
+        Row(Modifier.padding(start = 14.dp, end = 4.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            ShortsMark(24)
+            Spacer(Modifier.width(8.dp))
+            Text("Shorts", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
         }
-        shorts.take(6).chunked(3).forEachIndexed { row, pair ->
+        shorts.take(6).chunked(2).forEachIndexed { row, pair ->
             Row(
-                Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 pair.forEachIndexed { col, s ->
-                    val index = row * 3 + col
+                    val index = row * 2 + col
                     Box(
                         Modifier
                             .weight(1f)
-                            .aspectRatio(9f / 16f)
-                            .clip(RoundedCornerShape(12.dp))
+                            .aspectRatio(9f / 15f)
+                            .clip(RoundedCornerShape(8.dp))
                             .background(MaterialTheme.colorScheme.surfaceContainerHighest)
                             .clickable { nav.shorts(shorts, index) }
                     ) {
                         AsyncImage(model = s.thumbnail, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                        Box(Modifier.align(Alignment.TopEnd)) {
+                            androidx.compose.runtime.CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides Color.White) {
+                                VideoMenu(s.copy(short = true), nav)
+                            }
+                        }
                         Column(
                             Modifier
                                 .align(Alignment.BottomStart)
                                 .fillMaxWidth()
-                                .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xC0000000))))
-                                .padding(6.dp)
+                                .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xB3000000))))
+                                .padding(start = 10.dp, end = 10.dp, top = 24.dp, bottom = 10.dp)
                         ) {
-                            Text(s.title, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, lineHeight = 15.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            if (s.views >= 0) Text(formatCount(s.views) + " views", color = Color(0xCCFFFFFF), fontSize = 10.sp)
+                            Text(
+                                s.title, color = Color.White, fontWeight = FontWeight.Medium, fontSize = 15.sp, lineHeight = 19.sp,
+                                maxLines = 2, overflow = TextOverflow.Ellipsis,
+                            )
+                            if (s.views >= 0) Text(formatCount(s.views) + " views", color = Color(0xE6FFFFFF), fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
                         }
                     }
                 }
-                repeat(3 - pair.size) { Spacer(Modifier.weight(1f)) }
+                if (pair.size == 1) Spacer(Modifier.weight(1f))
             }
         }
     }
+}
+
+/** Vidflow's Shorts mark: a red rounded shape with a white play arrow. */
+@Composable
+fun ShortsMark(size: Int) {
+    Box(
+        Modifier
+            .size(size.dp)
+            .clip(RoundedCornerShape((size / 3).dp))
+            .background(Accent),
+        contentAlignment = Alignment.Center,
+    ) { Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size((size * 0.7).dp)) }
 }
 
 /** Popular lists (the old categories), reached from the compass chip. */

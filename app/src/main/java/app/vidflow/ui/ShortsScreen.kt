@@ -105,7 +105,7 @@ fun ShortsScreen(
     key: String = "shorts-home",
     startIndex: Int = 0,
     initial: List<Video>? = null,
-    load: () -> Paged = { Yt.shortsFeed(Library.subscriptions.value.map { it.url }) },
+    load: () -> Paged = { Yt.takeWarmShorts() ?: Yt.shortsFeed(Library.subscriptions.value.map { it.url }) },
 ) {
     var generation by remember(key) { mutableIntStateOf(0) }
     val list = remember(key, generation) { PagedList() }
@@ -376,7 +376,7 @@ private fun ShortPage(v: Video, active: Boolean, nav: Nav, commentsOpen: Boolean
 
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
                 val likes = info?.likeCount ?: -1
                 val likedList by app.vidflow.core.Saved.liked.collectAsState()
@@ -413,8 +413,10 @@ private fun ShortPage(v: Video, active: Boolean, nav: Nav, commentsOpen: Boolean
         if (playingThis && !commentsOpen) {
             LinearProgressIndicator(
                 progress = { progress },
-                color = Color.White,
-                trackColor = Color(0x33FFFFFF),
+                color = Color(0xFFFF0033),
+                trackColor = Color(0x40FFFFFF),
+                drawStopIndicator = {},
+                gapSize = 0.dp,
                 modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(2.dp),
             )
         }
@@ -437,18 +439,18 @@ private fun SideAction(icon: ImageVector, label: String, tint: Color = Color.Whi
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
-            .width(62.dp)
+            .width(58.dp)
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick),
     ) {
-        Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(34.dp), contentAlignment = Alignment.Center) {
             val flip = Modifier.graphicsLayer { if (mirror) scaleX = -1f }
             // Shadow: a blurred dark copy behind the icon keeps it readable on bright videos.
-            Icon(icon, contentDescription = null, tint = Color(0x99000000), modifier = flip.size(32.dp).blur(3.dp))
-            Icon(icon, contentDescription = label, tint = tint, modifier = flip.size(32.dp))
+            Icon(icon, contentDescription = null, tint = Color(0x66000000), modifier = flip.size(28.dp).blur(2.dp))
+            Icon(icon, contentDescription = label, tint = tint, modifier = flip.size(28.dp))
         }
         Text(
-            label, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium,
-            maxLines = 1, style = Shadowed,
+            label, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Normal,
+            maxLines = 1, style = Shadowed, modifier = Modifier.padding(top = 1.dp),
         )
     }
 }

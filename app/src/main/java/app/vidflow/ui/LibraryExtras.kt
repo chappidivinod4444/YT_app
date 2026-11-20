@@ -90,7 +90,7 @@ fun SaveToPlaylistDialog(video: Video, shorts: Boolean = false, onClose: () -> U
     var creating by remember { mutableStateOf(false) }
 
     // Account playlists, and where this video sits in each (entry id, or null if not in it).
-    var account by remember { mutableStateOf<List<app.vidflow.core.GoogleAccount.AccountList>?>(null) }
+    var account by remember { mutableStateOf(PlaylistCache.lists) }
     val entries = remember { androidx.compose.runtime.mutableStateMapOf<String, String?>() }
     val busy = remember { androidx.compose.runtime.mutableStateListOf<String>() }
     var accountError by remember { mutableStateOf<String?>(null) }
@@ -100,14 +100,23 @@ fun SaveToPlaylistDialog(video: Video, shorts: Boolean = false, onClose: () -> U
         tokens.run {
             scope.launch {
                 try {
+                    // Shown at once from last time, refreshed in the background.
                     val mine = withContext(Dispatchers.IO) { app.vidflow.core.GoogleAccount.myPlaylists() }
+                    PlaylistCache.lists = mine
                     account = mine
-                    // Check membership a few at a time so the sheet fills in quickly.
-                    mine.take(40).chunked(6).forEach { group ->
-                        group.map { p ->
-                            async(Dispatchers.IO) { p.id to runCatching { app.vidflow.core.GoogleAccount.playlistItemId(p.id, videoId) }.getOrNull() }
-                        }.forEach { d -> val (id, item) = d.await(); entries[id] = item }
-                    }
+                    // Check which lists already have this video, all at once (bookmarks fill in as answers come).
+                    val gate = kotlinx.coroutines.sync.Semaphore(10)
+                    mine.take(60).map { p ->
+                        async(Dispatchers.IO) {
+                            gate.acquire()
+                            try {
+                                val item = runCatching { app.vidflow.core.GoogleAccount.playlistItemId(p.id, videoId) }.getOrNull()
+                                withContext(Dispatchers.Main) { entries[p.id] = item }
+                            } finally {
+                                gate.release()
+                            }
+                        }
+                    }.forEach { it.await() }
                 } catch (e: Throwable) {
                     accountError = (e as? app.vidflow.core.GoogleAccount.ApiException)?.message ?: friendlyError(e)
                     account = emptyList()
@@ -124,6 +133,10 @@ fun SaveToPlaylistDialog(video: Video, shorts: Boolean = false, onClose: () -> U
         tokens.run {
             scope.launch {
                 try {
+                    // Not checked yet: find out first, so it's never added twice.
+                    if (!entries.containsKey(p.id)) {
+                        entries[p.id] = withContext(Dispatchers.IO) { app.vidflow.core.GoogleAccount.playlistItemId(p.id, vid) }
+                    }
                     val item = entries[p.id]
                     if (item != null) {
                         withContext(Dispatchers.IO) { app.vidflow.core.GoogleAccount.removeFromPlaylist(item) }
@@ -177,7 +190,7 @@ fun SaveToPlaylistDialog(video: Video, shorts: Boolean = false, onClose: () -> U
                             p.privacy.replaceFirstChar { it.uppercase() }.ifEmpty { "Private" } +
                                 if (p.count > 0) " · ${p.count} video${if (p.count == 1L) "" else "s"}" else "",
                             inside = entries[p.id] != null,
-                            loading = !known || p.id in busy,
+                            loading = p.id in busy,
                         ) { toggleAccount(p) }
                     }
                 } else {
@@ -300,6 +313,11 @@ private fun SaveRow(thumb: String?, title: String, subtitle: String, inside: Boo
             )
         }
     }
+}
+
+/** Your account's playlists from the last time the sheet opened, so it shows them instantly. */
+object PlaylistCache {
+    var lists: List<app.vidflow.core.GoogleAccount.AccountList>? = null
 }
 
 /** A playlist cover with the little "stack" edge above it. */

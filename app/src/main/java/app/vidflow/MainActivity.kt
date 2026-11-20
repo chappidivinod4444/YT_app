@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.width
@@ -34,8 +35,19 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.outlined.PlayCircle
+import androidx.compose.material.icons.filled.Subscriptions
+import androidx.compose.material.icons.outlined.Subscriptions
+import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.outlined.AccountCircle
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.ui.unit.sp
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -101,6 +113,16 @@ class VidflowApp : Application() {
                 .build()
         }
         PlayerHolder.init(this)
+        // Get the first Shorts ready in the background, so opening Shorts starts at once.
+        Thread {
+            runCatching {
+                val page = Yt.shortsFeed(Library.subscriptions.value.map { it.url })
+                Yt.warmShorts = page
+                page.items.filterIsInstance<app.vidflow.core.Video>().take(2).forEach { v ->
+                    PlayerHolder.prefetch(Yt.stream(v.url), 720)
+                }
+            }
+        }.apply { priority = Thread.MIN_PRIORITY }.start()
     }
 }
 
@@ -398,38 +420,49 @@ private fun Root(activity: MainActivity) {
 
             val isTab = top == Screen.Home || top == Screen.Library || top == Screen.Shorts || top == Screen.Subscriptions
             if (isTab) {
-                NavigationBar(
-                    containerColor = if (top == Screen.Shorts) Color.Black else MaterialTheme.colorScheme.background,
-                    tonalElevation = 0.dp,
-                    modifier = Modifier.height(64.dp),
-                ) {
-                    NavigationBarItem(
-                        selected = top == Screen.Home,
-                        onClick = { stack.clear(); stack.add(Screen.Home); tab = Screen.Home },
-                        icon = { Icon(Icons.Filled.Home, contentDescription = null) },
-                        label = { Text("Home") },
-                    )
-                    NavigationBarItem(
-                        selected = top == Screen.Shorts,
-                        onClick = { stack.clear(); stack.add(Screen.Shorts); tab = Screen.Shorts },
-                        icon = { Text("\u26A1", style = MaterialTheme.typography.titleMedium) },
-                        label = { Text("Shorts") },
-                    )
-                    NavigationBarItem(
-                        selected = top == Screen.Subscriptions,
-                        onClick = { stack.clear(); stack.add(Screen.Subscriptions); tab = Screen.Subscriptions },
-                        icon = { Icon(Icons.Filled.PlayArrow, contentDescription = null) },
-                        label = { Text("Subscriptions") },
-                    )
-                    NavigationBarItem(
-                        selected = top == Screen.Library,
-                        onClick = { stack.clear(); stack.add(Screen.Library); tab = Screen.Library },
-                        icon = {
-                            val avatar by GoogleAccount.avatar.collectAsState()
-                            if (avatar != null) app.vidflow.ui.Avatar(avatar, 26) else Icon(Icons.Filled.Person, contentDescription = null)
-                        },
-                        label = { Text("You") },
-                    )
+                // YouTube-style bottom bar: outline icons, filled when selected, small labels.
+                val barBg = if (top == Screen.Shorts) Color.Black else MaterialTheme.colorScheme.background
+                val fg = if (top == Screen.Shorts) Color.White else MaterialTheme.colorScheme.onBackground
+                Column(Modifier.fillMaxWidth().background(barBg).navigationBarsPadding()) {
+                    Box(Modifier.fillMaxWidth().height(0.5.dp).background(if (top == Screen.Shorts) Color(0x33FFFFFF) else MaterialTheme.colorScheme.outlineVariant))
+                    Row(Modifier.fillMaxWidth().height(54.dp), verticalAlignment = Alignment.CenterVertically) {
+                        @Composable
+                        fun Tab(screen: Screen, label: String, on: androidx.compose.ui.graphics.vector.ImageVector, off: androidx.compose.ui.graphics.vector.ImageVector?) {
+                            val selected = top == screen
+                            Column(
+                                Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                                    .clickable(
+                                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                                        indication = null,
+                                    ) { stack.clear(); stack.add(screen); tab = screen },
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center,
+                            ) {
+                                if (off == null) {
+                                    val avatar by GoogleAccount.avatar.collectAsState()
+                                    Box(
+                                        Modifier
+                                            .size(26.dp)
+                                            .then(if (selected) Modifier.border(1.5.dp, fg, androidx.compose.foundation.shape.CircleShape) else Modifier)
+                                            .padding(if (selected) 2.dp else 0.dp),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        if (avatar != null) app.vidflow.ui.Avatar(avatar, 24)
+                                        else Icon(if (selected) Icons.Filled.AccountCircle else Icons.Outlined.AccountCircle, contentDescription = null, tint = fg)
+                                    }
+                                } else {
+                                    Icon(if (selected) on else off, contentDescription = null, tint = fg, modifier = Modifier.size(24.dp))
+                                }
+                                Text(label, color = fg, fontSize = 10.sp, modifier = Modifier.padding(top = 3.dp))
+                            }
+                        }
+                        Tab(Screen.Home, "Home", Icons.Filled.Home, Icons.Outlined.Home)
+                        Tab(Screen.Shorts, "Shorts", Icons.Filled.PlayCircle, Icons.Outlined.PlayCircle)
+                        Tab(Screen.Subscriptions, "Subscriptions", Icons.Filled.Subscriptions, Icons.Outlined.Subscriptions)
+                        Tab(Screen.Library, "You", Icons.Filled.AccountCircle, null)
+                    }
                 }
             }
         }
